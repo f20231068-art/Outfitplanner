@@ -1,0 +1,24 @@
+{
+ "product_results": {
+  "title": "H&M Men Drop-Shoulder Sleeves Raw Edge T-shirt'('XL\")\"'by Myntra'",
+  "brand": "H&M",
+  "stores": [
+   {
+    "name": "Myntra",
+    "logo": "https://encrypted-tbn2.gstatic.com/faviconV2?url=http://www.myntra.com&client=SHOPPING&size=32&type=FAVICON&fallback_opts=TYPE,SIZE,URL",
+    "link": "http://www.myntra.com/Tshirts/H%26M/HM-Men-Drop-Shoulder-Sleeves-Raw-Edge-T-shirt/43745553/buy",
+    "title": "H&M Men Drop-Shoulder Sleeves Raw Edge T-shirt'('XL\")\"'by Myntra'",
+    "details_and_offers": [
+     "In stock online",
+     "Free delivery between Mon–Wed",
+     "14-day returns"
+    ],
+    "price": "₹1,499",
+    "extracted_price": 1499,
+    "shipping": "Free",
+    "total": "₹1,499",
+    "extracted_total": 1499
+   }
+  ]
+ }
+}

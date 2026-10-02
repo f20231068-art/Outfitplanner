@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Stylist - Tools Reference v2</title>
+<style>
+:root{
+  --bg:#fafaf7; --surface:#ffffff; --text:#1c1c1a; --muted:#66665f; --border:#e3e2dc;
+  --accent:#1f5fbf; --code-bg:#f2f1ec;
+  --api:#1f5fbf; --parse:#7a4bb8; --validate:#b36b00; --store:#2a7d4f; --ai:#b83b6a; --guard:#b3261e;
+  --ok-bg:#e4f3ea; --plan-bg:#fff1d6; --bad-bg:#fbe4e1;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#141413; --surface:#1d1d1b; --text:#ecebe6; --muted:#a19f95; --border:#34332f;
+    --accent:#7fb0ff; --code-bg:#262623;
+    --api:#7fb0ff; --parse:#c4a0f0; --validate:#f0b25a; --store:#6fcf97; --ai:#f08fb3; --guard:#ff8a80;
+    --ok-bg:#16301f; --plan-bg:#3a2e12; --bad-bg:#3a1a17;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#141413; --surface:#1d1d1b; --text:#ecebe6; --muted:#a19f95; --border:#34332f;
+  --accent:#7fb0ff; --code-bg:#262623;
+  --api:#7fb0ff; --parse:#c4a0f0; --validate:#f0b25a; --store:#6fcf97; --ai:#f08fb3; --guard:#ff8a80;
+  --ok-bg:#16301f; --plan-bg:#3a2e12; --bad-bg:#3a1a17;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 system-ui,-apple-system,Segoe UI,sans-serif}
+.wrap{max-width:1000px;margin:0 auto;padding:24px 16px 80px}
+h1{font-size:2rem;margin:0 0 4px}
+h2{font-size:1.5rem;margin:48px 0 8px;padding-top:16px;border-top:1px solid var(--border)}
+h3{font-size:1.1rem;margin:26px 0 8px}
+p{margin:8px 0}
+.sub{color:var(--muted)}
+code,pre{font-family:ui-monospace,Consolas,Menlo,monospace;font-size:.88rem}
+code{background:var(--code-bg);padding:1px 5px;border-radius:4px}
+pre{background:var(--code-bg);padding:12px 14px;border-radius:8px;overflow-x:auto;margin:8px 0}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;margin:8px 0;font-size:.92rem}
+th,td{border:1px solid var(--border);padding:6px 10px;text-align:left;vertical-align:top}
+th{background:var(--code-bg)}
+.tbl{overflow-x:auto}
+nav{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin:20px 0}
+nav ul{margin:6px 0 0;padding-left:20px;columns:2}
+nav a,td a{color:var(--accent);text-decoration:none}
+.badge{display:inline-block;font-size:.75rem;font-weight:600;padding:2px 8px;border-radius:99px;vertical-align:middle;margin-left:6px}
+.b-ok{background:var(--ok-bg);color:var(--store)}
+.b-plan{background:var(--plan-bg);color:var(--validate)}
+.b-cut{background:var(--bad-bg);color:var(--guard)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:4px 18px 14px;margin:12px 0}
+ol.flow{list-style:none;counter-reset:s;padding:0;margin:8px 0}
+ol.flow li{counter-increment:s;position:relative;padding:8px 0 8px 40px;border-left:2px solid var(--border);margin-left:14px}
+ol.flow li::before{content:counter(s);position:absolute;left:-14px;top:8px;width:26px;height:26px;border-radius:50%;background:var(--surface);border:2px solid var(--border);text-align:center;font-size:.8rem;line-height:22px;font-weight:600}
+.tag{display:inline-block;font-size:.7rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase;padding:1px 7px;border-radius:4px;margin-right:6px;color:#fff}
+.t-api{background:var(--api)} .t-parse{background:var(--parse)} .t-validate{background:var(--validate)}
+.t-store{background:var(--store)} .t-ai{background:var(--ai)} .t-guard{background:var(--guard)}
+@media (prefers-color-scheme: dark){ .tag{color:#111} }
+:root[data-theme="dark"] .tag{color:#111}
+:root[data-theme="light"] .tag{color:#fff}
+.legend span{margin-right:10px;font-size:.85rem}
+.note{border-left:4px solid var(--validate);background:var(--code-bg);padding:8px 12px;border-radius:0 8px 8px 0;margin:12px 0}
+@media (max-width:640px){ nav ul{columns:1} h1{font-size:1.6rem} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>AI Stylist: Tools Reference v2</h1>
+<p class="sub">Every tool, its input and output schemas, and the workflow behind it, revised after a product and engineering audit. <b>Menswear only</b>: gender is never asked, never a parameter; searches and verification always assume a male adult shopper.</p>
+
+<div class="note"><b>Status.</b> Built and tested (26 tests): the stylist graph, <code>find_products</code>, <code>verify_product</code>, the mock search. Everything marked <span class="badge b-plan">planned</span> is a design for phases 3, 9 and 10. External API shapes (search API, image model) are unverified and must be re-checked when built.</div>
+
+<nav>
+<b>Contents</b>
+<ul>
+  <li><a href="#audit">Audit: what was wrong and what changed</a></li>
+  <li><a href="#overview">Tool inventory and conventions</a></li>
+  <li><a href="#find_products">find_products + verification</a></li>
+  <li><a href="#search_products">search_products</a></li>
+  <li><a href="#check_link">check_link</a></li>
+  <li><a href="#generate_image">generate_image</a></li>
+  <li><a href="#create_character_sheet">create_character_sheet</a></li>
+  <li><a href="#generate_tryon">generate_tryon</a></li>
+  <li><a href="#get_job">get_job</a></li>
+  <li><a href="#internal">Internal functions (not tools)</a></li>
+  <li><a href="#mapping">State to tool mapping</a></li>
+</ul>
+</nav>
+
+<h2 id="audit">Audit: what was wrong and what changed</h2>
+<p>Bugs were confirmed by running the code, not assumed. Design findings are judgements about v1 of the schemas.</p>
+
+<h3>A. Confirmed bugs (fixed in code, tests added)</h3>
+<div class="tbl"><table>
+<tr><th>#</th><th>Finding</th><th>User impact</th><th>Fix</th></tr>
+<tr><td>A1</td><td>A "Women's ..." product passed verification for a male shopper (men/women were ignored as stop words).</td><td>Wrong-gender clothes shown as a match. The worst kind of wrong result for a menswear app.</td><td>New <code>gender</code> check: rejects women's and kids' items, accepts men's, unisex and unstated.</td></tr>
+<tr><td>A2</td><td>The same product could appear in two outfits (identical top URL reused).</td><td>"4 outfits" that look like 2. Retries could also re-add products already shown.</td><td>Cross-outfit de-duplication plus <code>exclude_urls</code> carrying products from earlier rounds.</td></tr>
+<tr><td>A3</td><td><code>Product</code> had no stock, size or price-freshness fields.</td><td>User clicks a buy link and the item is sold out. Stale price shown as current.</td><td>Added <code>in_stock</code>, <code>available_sizes</code>, <code>mrp_inr</code>, <code>fetched_at</code>, <code>extraction</code>. Out-of-stock candidates are rejected.</td></tr>
+<tr><td>A4</td><td>The agent asked "men, women or unisex?"</td><td>Pointless friction for a men-only app.</td><td>Gender removed from preferences and prompts; the stylist now needs only budget and occasion.</td></tr>
+</table></div>
+
+<h3>B. Design findings (applied to the schemas below)</h3>
+<div class="tbl"><table>
+<tr><th>#</th><th>Finding in v1</th><th>Change in v2</th></tr>
+<tr><td>B1</td><td><code>get_budget_split</code> was a tool, but it is pure arithmetic with no network call. Exposing it adds latency, a failure mode and tool-surface for no benefit.</td><td><span class="badge b-cut">cut</span> Now a plain function inside the planner code.</td></tr>
+<tr><td>B2</td><td><code>get_product_image</code> was an MCP tool, but only the server itself needs it (search and try-on both run server-side).</td><td><span class="badge b-cut">internal</span> Moved to an internal function. Fewer tools to secure and version.</td></tr>
+<tr><td>B3</td><td><code>search_products</code> and <code>find_products</code> both validated price, category and colour: duplicated, and two places to get it wrong.</td><td>Clean split: <code>search_products</code> = retrieval, extraction and hygiene (link live, image OK). <code>find_products</code> = requirement matching. <code>confidence</code> removed; provenance fields (<code>extraction</code>, <code>fetched_at</code>) added so the matcher can trust LLM-extracted fields less.</td></tr>
+<tr><td>B4</td><td><code>generate_image</code> was one polymorphic schema: <code>task</code> enum plus free <code>prompt_ref</code> and free-form <code>variables</code>. A caller could pick any prompt or inject text, and the schema could not enforce "try-on needs 3 images, style preview needs none".</td><td>Discriminated union: each task has its own required, typed fields. Prompt template is chosen by the server from the task, never by the caller.</td></tr>
+<tr><td>B5</td><td>Image calls take 20-90 s but were modelled as one blocking call. Retries would double-charge.</td><td>Idempotency key on every costly call; sheet and try-on return a <code>job_id</code> and are polled with <code>get_job</code>.</td></tr>
+<tr><td>B6</td><td><code>check_link</code> returned a boolean. A bot-blocked 403 and a dead 404 look the same, but mean opposite things.</td><td>Tri-state <code>verdict</code>: <code>live | dead | unverified</code>, with a reason; soft-404 pages detected.</td></tr>
+<tr><td>B7</td><td><code>generate_tryon</code> took raw URLs and gave no honesty signal about fit or accuracy.</td><td>Takes validated product references; output carries a disclaimer and QA detail. Try-on shows how clothes look, not whether the size fits.</td></tr>
+<tr><td>B8</td><td>No cross-cutting contract: no request ID, no schema version, unstructured <code>warnings</code> strings, errors without retry guidance, signed URLs without expiry.</td><td>One envelope for all tools (see conventions).</td></tr>
+</table></div>
+
+<h3>C. Product decisions still open</h3>
+<ul>
+  <li><b>Affiliate links.</b> Amazon, Myntra and others pay commission through tracked links. It is the natural revenue model, but needs disclosure on screen and changes how <code>url</code> is produced. Decide before phase 3.</li>
+  <li><b>Size.</b> Should the user give a size up front so only in-stock sizes are shown? Higher purchase rate, one more question.</li>
+  <li><b>Photo burden.</b> Exactly 8 photos is high friction. Consider 3+3 minimum with 4+4 recommended, and measure drop-off.</li>
+  <li><b>Price freshness.</b> Prices change daily. Show "as of" time, or re-check on click.</li>
+</ul>
+
+<h2 id="overview">Tool inventory and conventions</h2>
+<div class="legend">
+  <span><b class="tag t-api">API</b>external call</span>
+  <span><b class="tag t-parse">Parse</b>extract / transform</span>
+  <span><b class="tag t-validate">Validate</b>check rules</span>
+  <span><b class="tag t-store">Store</b>cache / save</span>
+  <span><b class="tag t-ai">AI</b>model call</span>
+  <span><b class="tag t-guard">Guard</b>security / limits</span>
+</div>
+
+<table class="tbl">
+<tr><th>Name</th><th>Kind</th><th>Called by</th><th>Purpose</th><th>Status</th></tr>
+<tr><td><a href="#find_products">find_products</a></td><td>graph step</td><td>LangGraph</td><td>Search, verify every candidate, return requested-vs-found comparison</td><td><span class="badge b-ok">built</span></td></tr>
+<tr><td><a href="#search_products">search_products</a></td><td>MCP tool</td><td>find_products</td><td>Retrieve and extract candidate products</td><td><span class="badge b-plan">phase 3</span></td></tr>
+<tr><td><a href="#check_link">check_link</a></td><td>MCP tool</td><td>LangGraph, search_products</td><td>Is a buy link live?</td><td><span class="badge b-plan">phase 3</span></td></tr>
+<tr><td><a href="#generate_image">generate_image</a></td><td>MCP tool</td><td>Mastra, LangGraph</td><td>Provider-agnostic image generation</td><td><span class="badge b-plan">phase 3 / 9</span></td></tr>
+<tr><td><a href="#create_character_sheet">create_character_sheet</a></td><td>MCP tool (job)</td><td>Mastra</td><td>Build the user's reference sheet</td><td><span class="badge b-plan">phase 9</span></td></tr>
+<tr><td><a href="#generate_tryon">generate_tryon</a></td><td>MCP tool (job)</td><td>Mastra</td><td>Render the user wearing an outfit</td><td><span class="badge b-plan">phase 10</span></td></tr>
+<tr><td><a href="#get_job">get_job</a></td><td>MCP tool</td><td>Mastra</td><td>Poll an image job</td><td><span class="badge b-plan">phase 9</span></td></tr>
+<tr><td>ping</td><td>MCP tool</td><td>tests</td><td>Health check, returns "pong"</td><td><span class="badge b-ok">built</span></td></tr>
+<tr><td><a href="#internal">get_product_image, split_budget, ImageGenProvider</a></td><td>internal</td><td>server code</td><td>Not exposed over MCP</td><td><span class="badge b-cut">internal</span></td></tr>
+</table>
+
+<h3>Conventions for every MCP tool</h3>
+<ul>
+  <li><b>Transport and auth:</b> MCP over streamable HTTP; <code>Authorization: Bearer &lt;JWT RS256&gt;</code> on every call. <code>user_id</code> comes from the token, never from arguments.</li>
+  <li><b>Request context:</b> every input accepts optional <code>request_id</code> (trace correlation across Mastra, API and MCP). Every output echoes it and includes <code>schema_version</code>.</li>
+  <li><b>Idempotency:</b> tools that cost money or write data (<code>generate_image</code>, <code>create_character_sheet</code>, <code>generate_tryon</code>) require <code>idempotency_key</code>. A retry with the same key returns the original result instead of charging again.</li>
+  <li><b>Deadlines:</b> read tools accept <code>deadline_ms</code>; the tool returns what it has by then, marked partial, instead of hanging the conversation.</li>
+  <li><b>Structured warnings:</b> <code>{ "code": "PRICE_OVER_CAP", "message": "...", "count": 2 }</code>, not free strings.</li>
+  <li><b>URLs to private files</b> are signed and carry <code>expires_at</code>.</li>
+  <li><b>Audit:</b> each call appends a hash-chained audit row (tool, user, hashed arguments, outcome, latency). Raw images and page text are never logged.</li>
+  <li><b>Untrusted content:</b> web page text is data, never instructions. Outbound fetches use a domain allow-list, an SSRF guard (no private IPs), a redirect cap, timeouts and size caps.</li>
+  <li><b>Tool descriptions</b> are written for the model: when to use it, what it returns, what it will not do.</li>
+</ul>
+
+<h3>Error envelope</h3>
+<pre><code>{ "error": { "code": "UPSTREAM_TIMEOUT | NOT_FOUND | INVALID_INPUT | RATE_LIMITED | FORBIDDEN | CAP_REACHED | UNSAFE_REQUEST",
+             "message": "human-readable",
+             "retryable": true,
+             "retry_after_ms": 2000 },
+  "request_id": "..." }</code></pre>
+<p>Partial success beats failure: a search where 3 of 10 pages fail returns 7 results plus a warning.</p>
+
+<!-- ============ find_products ============ -->
+<h2 id="find_products">find_products + verification <span class="badge b-ok">built</span></h2>
+<p>The graph step that turns the planner's specs into real outfits. Every search result is <b>untrusted</b>: a product is shown only if a deterministic check proves it matches. Code: <code>services/api/src/api/agent/find.py</code> and <code>verify.py</code>.</p>
+
+<div class="card">
+<h3>Anti-hallucination rules</h3>
+<ul>
+  <li>Product fields come only from scraped page data. A model never writes or fills in a product.</li>
+  <li>Each verdict records its <b>evidence</b>. No evidence means <code>unknown</code>, never <code>match</code>.</li>
+  <li><b>Required</b> to be <code>match</code>: price and item. A <code>mismatch</code> on any attribute, including a colour that contradicts the request, rejects the product. Fit, fabric, category and gender may be <code>unknown</code> but not contradicted.</li>
+  <li><b>Colour rule:</b> colour is looked up in the page's colour field, then the title and description (free, no extra search credits). If neither states a colour, the product is accepted on the strength of the colour-specific search, marked <code>assumed: true</code>, the report gets <code>confidence: "low"</code>, and it ranks below confirmed products. The reply to the user says "colour not confirmed by the store".</li>
+  <li>Rejected candidates are returned with reasons, never silently dropped.</li>
+  <li><code>rank_and_validate</code> re-checks that every outfit item carries a passing report before the user sees it.</li>
+</ul>
+
+<h3>Input schema (<code>FindProductsInput</code>)</h3>
+<div class="tbl"><table>
+<tr><th>Field</th><th>Type</th><th>Notes</th></tr>
+<tr><td>specs</td><td>OutfitSpec[]</td><td>Each has <code>top</code> and <code>bottom</code> <code>ItemSpec</code> (category, item, color, fit?, fabric?, max_price_inr) and a <code>rationale</code></td></tr>
+<tr><td>budget_inr</td><td>integer</td><td>Total outfit budget; top + bottom must fit</td></tr>
+<tr><td>exclude_urls</td><td>string[]</td><td>Products already used in earlier outfits (default empty)</td></tr>
+</table></div>
+
+<h3>Output schema (<code>FindProductsOutput</code>)</h3>
+<pre><code>{
+  "outfits": [
+    {
+      "top":    { "title": "Men's Light Blue Oversized T-Shirt", "retailer": "Myntra", "price_inr": 899, "mrp_inr": 1499,
+                  "url": "...", "image_url": "...", "in_stock": true, "available_sizes": ["M","L"],
+                  "extraction": "json_ld", "fetched_at": "2026-10-02T09:15:00Z",
+                  "verification": { "is_match": true, "score": 1.0, "blocking": [], "checks": [ ... ] } },
+      "bottom": { ... same shape, own verification ... },
+      "total_inr": 2350,
+      "rationale": "pastel pairing"
+    }
+  ],
+  "unfilled":  [ { "spec_index": 2, "item": "t-shirt + baggy pants", "reason": "no verified match for 'peach baggy pants'" } ],
+  "rejected":  [ { "title": "Black Baggy Pants", "retailer": "Ajio", "url": "...",
+                   "reasons": ["color: asked 'peach', found 'black' (mismatch)"] } ]
+}</code></pre>
+
+<h3>The comparison: <code>verification.checks[]</code></h3>
+<div class="tbl"><table>
+<tr><th>attribute</th><th>requested</th><th>found</th><th>status</th><th>evidence</th><th>required</th></tr>
+<tr><td>price</td><td>&lt;= 2000</td><td>1500</td><td>match</td><td>price field</td><td>yes</td></tr>
+<tr><td>item</td><td>baggy pants</td><td>baggy pants</td><td>match</td><td>all item words found in title/description</td><td>yes</td></tr>
+<tr><td>category</td><td>bottom</td><td>bottom</td><td>match</td><td>page category</td><td>blocks on mismatch</td></tr>
+<tr><td>color</td><td>peach</td><td>Peach</td><td>match</td><td>page color field</td><td>rejects if contradicted</td></tr>
+<tr><td>color (not stated)</td><td>peach</td><td>(none)</td><td>unknown, <code>assumed</code></td><td>trusted from the colour-specific search; <code>confidence: low</code></td><td>no</td></tr>
+<tr><td>gender</td><td>men</td><td>men</td><td>match</td><td>page gender field</td><td>blocks on mismatch</td></tr>
+<tr><td>fit</td><td>baggy</td><td>(none)</td><td>unknown</td><td>not stated on the page</td><td>blocks on mismatch</td></tr>
+</table></div>
+
+<h3>Workflow</h3>
+<ol class="flow">
+  <li><b class="tag t-api">API</b>Call <a href="#search_products">search_products</a> for every top and bottom in parallel (8 calls for 4 outfits). Today: <code>mock_search</code>, with the same signature.</li>
+  <li><b class="tag t-validate">Validate</b>For each candidate run <code>verify_product</code>: price vs cap, item words (synonyms: tee = t-shirt, trousers = pants), category contradiction, colour (page field first, then title/description), gender (reject women's and kids'), and fit / fabric if requested.</li>
+  <li><b class="tag t-validate">Validate</b>Reject out-of-stock candidates and products already used in another outfit (<code>exclude_urls</code> plus this round).</li>
+  <li><b class="tag t-parse">Parse</b>Per item choose the verified candidate with the highest match score, then the highest price under the cap.</li>
+  <li><b class="tag t-validate">Validate</b>Build an outfit only if both items verified and <code>top + bottom &lt;= budget_inr</code>; otherwise add an <code>unfilled</code> entry.</li>
+  <li><b class="tag t-store">Store</b>The graph saves <code>outfits</code>, planner <code>notes</code> (from <code>unfilled</code>) and <code>rejected</code>. The planner uses the notes to propose alternatives (max 2 retries).</li>
+</ol>
+<div class="note"><b>Measured on 319 real SerpAPI Shopping results (8 menswear queries).</b> Colour is stated in the title for only about 11% of products, so under the old strict rule only 11% passed. With the assumed-colour fallback, 54% are usable: 11% confirmed (high confidence) and 43% assumed (low confidence), giving 10 to 38 usable results per query. Reading the colour from the thumbnail by pixels was only 35% accurate and is not used. Fetching the retailer page (free) can confirm colour, gender and stock: Myntra pages embed them; other retailers are untested. Synonym and colour word lists are small.</div>
+</div>
+
+<!-- ============ search_products ============ -->
+<h2 id="search_products">search_products <span class="badge b-plan">phase 3</span></h2>
+<p>Retrieval only. Finds candidate men's products for <b>one</b> item and extracts their data. It does not decide whether a candidate matches the request; <code>find_products</code> does. The server always adds "men" to the query.</p>
+<div class="card">
+<h3>Input schema</h3>
+<div class="tbl"><table>
+<tr><th>Field</th><th>Type</th><th>Required</th><th>Notes</th></tr>
+<tr><td>item</td><td>string</td><td>yes</td><td>"t-shirt", "baggy pants"</td></tr>
+<tr><td>category</td><td>"top" | "bottom"</td><td>yes</td><td></td></tr>
+<tr><td>color</td><td>string</td><td>yes</td><td>"light blue"</td></tr>
+<tr><td>max_price_inr</td><td>integer</td><td>yes</td><td>Used to bias the query and drop obvious misses</td></tr>
+<tr><td>fit, fabric</td><td>string</td><td>no</td><td></td></tr>
+<tr><td>retailers</td><td>string[]</td><td>no</td><td>Subset of the allow-list; default all</td></tr>
+<tr><td>exclude_urls</td><td>string[]</td><td>no</td><td>Skip products already shown</td></tr>
+<tr><td>limit</td><td>integer</td><td>no</td><td>Default 10, max 20</td></tr>
+<tr><td>deadline_ms</td><td>integer</td><td>no</td><td>Return partial results by this time. Default 12000</td></tr>
+<tr><td>request_id</td><td>string</td><td>no</td><td></td></tr>
+</table></div>
+<p>The first six fields are the existing <code>ItemSpec</code>. There is no gender field by design.</p>
+
+<h3>Output schema</h3>
+<pre><code>{
+  "schema_version": "1",
+  "request_id": "...",
+  "results": [
+    {
+      "title": "Men's Light Blue Oversized Cotton T-Shirt",
+      "retailer": "Myntra",
+      "price_inr": 899, "mrp_inr": 1499,
+      "url": "https://www.myntra.com/...",
+      "image_url": "https://&lt;our-storage&gt;/products/ab12.jpg",
+      "color": "light blue",
+      "description": "...",
+      "attributes": { "color": "Light Blue", "fabric": "Cotton", "category": "top", "gender": "men" },
+      "in_stock": true, "available_sizes": ["M","L","XL"],
+      "extraction": "json_ld",            // json_ld | open_graph | llm_fallback
+      "fetched_at": "2026-10-02T09:15:00Z"
+    }
+  ],
+  "query_used": "light blue oversized cotton t-shirt men",
+  "from_cache": false,
+  "partial": false,
+  "warnings": [ { "code": "IMAGE_FAILED", "message": "2 products dropped: image did not load", "count": 2 } ]
+}</code></pre>
+<p><code>results[]</code> is the <code>Product</code> model. Empty <code>results</code> is a valid answer, not an error.</p>
+
+<h3>Workflow</h3>
+<ol class="flow">
+  <li><b class="tag t-guard">Guard</b>Verify JWT, rate-limit per user, validate input; reject retailers outside the allow-list.</li>
+  <li><b class="tag t-parse">Parse</b>Build the query: <code>"{color} {fit} {fabric} {item} men"</code>, normalised (lowercase, de-duplicated words).</li>
+  <li><b class="tag t-store">Store</b>Cache lookup by hash of the normalised arguments (TTL about 6 hours). A hit returns at once with <code>from_cache: true</code>.</li>
+  <li><b class="tag t-api">API</b>Call the search API (Tavily or SerpAPI), restricted to allow-listed domains, <code>max_results</code> about 2x <code>limit</code>. Retry 429 / 5xx with backoff (max 2 retries, 8 s timeout).</li>
+  <li><b class="tag t-guard">Guard</b>Drop hits whose host is not on the allow-list or whose URL is in <code>exclude_urls</code>.</li>
+  <li><b class="tag t-api">API</b>Fetch each product page concurrently (5 s timeout, 1 MB cap, SSRF guard, max 3 redirects), respecting <code>deadline_ms</code>.</li>
+  <li><b class="tag t-parse">Parse</b>Extract fields in priority order: (1) JSON-LD <code>Product</code> / <code>Offer</code>; (2) Open Graph and <code>product:*</code> meta tags; (3) fallback LLM extraction from the visible text with a strict schema and the instruction that the text is untrusted data. Record the source in <code>extraction</code>.</li>
+  <li><b class="tag t-parse">Parse</b>Normalise the price (strip the rupee sign, commas, "MRP"; ranges take the selling price; integer INR). Read stock and sizes where the page states them. Reject unparseable prices.</li>
+  <li><b class="tag t-validate">Validate</b>Hygiene only: link live (<a href="#check_link">check_link</a>), not a soft-404, image downloads and passes checks. Failures are dropped with a warning. <b>Requirement matching is not done here.</b></li>
+  <li><b class="tag t-store">Store</b>Cache images in our storage (internal <code>fetch_product_image</code>), cache the result list, append the audit row.</li>
+  <li>Return the output.</li>
+</ol>
+
+<h3>Failure behaviour</h3>
+<table class="tbl">
+<tr><th>Situation</th><th>Result</th></tr>
+<tr><td>Search API down or quota exhausted</td><td><code>UPSTREAM_TIMEOUT</code> / <code>RATE_LIMITED</code>, <code>retryable: true</code>, <code>retry_after_ms</code></td></tr>
+<tr><td>Some pages fail to load</td><td>Partial results plus warnings</td></tr>
+<tr><td>Deadline reached</td><td>Results so far, <code>partial: true</code></td></tr>
+<tr><td>Nothing usable</td><td><code>results: []</code>; <code>find_products</code> turns it into a planner note and replans</td></tr>
+</table>
+</div>
+
+<!-- ============ check_link ============ -->
+<h2 id="check_link">check_link <span class="badge b-plan">phase 3</span></h2>
+<p>Confirms a buy link is live and still points at an allowed retailer. Used inside <code>search_products</code> and again just before outfits are shown.</p>
+<div class="card">
+<h3>Input</h3>
+<table class="tbl"><tr><th>Field</th><th>Type</th><th>Required</th></tr>
+<tr><td>url</td><td>string (URL)</td><td>yes</td></tr>
+<tr><td>request_id</td><td>string</td><td>no</td></tr></table>
+<h3>Output</h3>
+<pre><code>{ "schema_version": "1", "url": "...", "final_url": "...",
+  "verdict": "live | dead | unverified",
+  "reason": "ok | not_found | gone | soft_404 | bot_blocked | timeout | redirected_off_domain | not_https",
+  "status": 200, "domain_allowed": true, "checked_at": "2026-10-02T09:15:00Z" }</code></pre>
+<p><code>unverified</code> (for example a 403 from bot protection) means "we could not tell". The agent keeps the product but does not claim it is confirmed live. <code>dead</code> removes it.</p>
+<h3>Workflow</h3>
+<ol class="flow">
+  <li><b class="tag t-guard">Guard</b>Parse the URL; allow only <code>https</code>; host must be on the allow-list.</li>
+  <li><b class="tag t-guard">Guard</b>Resolve DNS; reject private, loopback and link-local addresses.</li>
+  <li><b class="tag t-api">API</b><code>HEAD</code> (4 s timeout); on 405 / 403 fall back to <code>GET</code> reading only the first bytes.</li>
+  <li><b class="tag t-validate">Validate</b>Follow at most 3 redirects, re-checking allow-list and SSRF rules at each hop.</li>
+  <li><b class="tag t-parse">Parse</b>Soft-404 check: a 200 page whose title or text says "not found / no longer available" is <code>dead</code> with reason <code>soft_404</code>.</li>
+  <li>Map the outcome to <code>verdict</code> and <code>reason</code> and return.</li>
+</ol>
+</div>
+
+<!-- ============ generate_image ============ -->
+<h2 id="generate_image">generate_image <span class="badge b-plan">phase 3 / 9</span></h2>
+<p>The one place images are generated. The provider (OpenAI now, any other later) and model are config, so swapping never touches the agents. Used directly for style previews and flat-lays; the character-sheet and try-on tools call it internally.</p>
+<div class="card">
+<h3>Input: a discriminated union on <code>task</code></h3>
+<p>Each task has its own required fields. The server picks the prompt template from the task. The caller cannot pass a prompt or free-form variables.</p>
+<div class="tbl"><table>
+<tr><th>task</th><th>Required fields</th><th>Notes</th></tr>
+<tr><td><code>style_preview</code></td><td>style_id, style_name, style_description</td><td>No input images. Output is a clothing-only mood board. Pre-generated for the library.</td></tr>
+<tr><td><code>flatlay</code></td><td>top_image_id, bottom_image_id</td><td>Composes one outfit picture from cached product images.</td></tr>
+<tr><td><code>character_sheet</code></td><td>closeup_ids[4], fullbody_ids[4]</td><td>Normally reached through <code>create_character_sheet</code>.</td></tr>
+<tr><td><code>tryon</code></td><td>sheet_id, top_image_id, bottom_image_id</td><td>Normally reached through <code>generate_tryon</code>.</td></tr>
+</table></div>
+<p>Common fields: <code>idempotency_key</code> (required), <code>request_id</code>, <code>size</code> (optional, default per task). All ids are image ids already in our storage and owned by the caller; URLs are not accepted.</p>
+
+<h3>Output</h3>
+<pre><code>{ "schema_version": "1", "request_id": "...",
+  "status": "succeeded | running | failed",
+  "job_id": "job_5c1e",               // present when status is running
+  "images": [ { "image_id": "gen_71ab", "url": "https://&lt;storage&gt;/generated/71ab.png",
+                "expires_at": "2026-10-02T10:15:00Z", "width": 1024, "height": 1536 } ],
+  "provider": "openai", "model": "&lt;from config&gt;", "prompt_version": "tryon.v1",
+  "cost_estimate_usd": 0.04, "latency_ms": 18400 }</code></pre>
+
+<h3>Workflow</h3>
+<ol class="flow">
+  <li><b class="tag t-guard">Guard</b>Verify JWT; check <code>idempotency_key</code> (a repeat returns the stored result); per-user daily cap and rate limit (<code>CAP_REACHED</code>); for tasks using personal photos confirm active consent.</li>
+  <li><b class="tag t-store">Store</b>Load input images by id and confirm each belongs to the caller (<code>FORBIDDEN</code> otherwise).</li>
+  <li><b class="tag t-parse">Parse</b>Load the server-side prompt template for the task and fill it from the typed fields.</li>
+  <li><b class="tag t-guard">Guard</b>Safety rules per task: clothing swap only for try-on, no body alteration, nothing sexual; violations return <code>UNSAFE_REQUEST</code>.</li>
+  <li><b class="tag t-api">API</b>Call the <code>ImageGenProvider</code> adapter: <code>generate(task, prompt, images, size)</code>. The adapter hides provider differences (multipart versus JSON, base64 versus URL). Long timeout (about 90 s); one retry on 5xx. Slow tasks run as a job.</li>
+  <li><b class="tag t-parse">Parse</b>Decode the response into bytes.</li>
+  <li><b class="tag t-validate">Validate</b>Output decodes, size is as expected; provider safety flags surface as errors, never ignored.</li>
+  <li><b class="tag t-store">Store</b>Save to object storage, record cost and latency, write the result row.</li>
+  <li>Append the audit row (ids and hashes only) and return.</li>
+</ol>
+<div class="note">The image model in your notes could not be verified by me. Its exact ID, input-image limits and API shape must be confirmed before phase 9; only the adapter should need to change.</div>
+</div>
+
+<!-- ============ create_character_sheet ============ -->
+<h2 id="create_character_sheet">create_character_sheet <span class="badge b-plan">phase 9</span></h2>
+<p>Turns the user's photos into one reusable reference sheet. Generated once, reused for every try-on. Runs as a job.</p>
+<div class="card">
+<h3>Input</h3>
+<table class="tbl"><tr><th>Field</th><th>Type</th><th>Required</th><th>Notes</th></tr>
+<tr><td>closeup_upload_ids</td><td>string[4]</td><td>yes</td><td>Face close-ups (min 3 if the product decision in C allows)</td></tr>
+<tr><td>fullbody_upload_ids</td><td>string[4]</td><td>yes</td><td>Long shots</td></tr>
+<tr><td>idempotency_key</td><td>string</td><td>yes</td><td></td></tr>
+<tr><td>request_id</td><td>string</td><td>no</td><td></td></tr></table>
+<h3>Output</h3>
+<pre><code>{ "schema_version": "1", "status": "queued | running | ready | failed", "job_id": "job_77aa",
+  "sheet_id": "cs_31d0",                    // when ready
+  "url": "https://&lt;storage&gt;/sheets/31d0.png", "expires_at": "...",
+  "review_required": true,                  // user must confirm "looks like me"
+  "input_quality": [ { "upload_id": "up_1", "ok": false, "reason": "two people detected" } ],
+  "prompt_version": "character_sheet.v1", "model": "&lt;from config&gt;" }</code></pre>
+<h3>Workflow</h3>
+<ol class="flow">
+  <li><b class="tag t-guard">Guard</b>JWT; consent active; daily cap; idempotency key.</li>
+  <li><b class="tag t-validate">Validate</b>Exactly the required uploads, all owned by the caller and <code>valid</code> (type, size, EXIF stripped, one person, sharp, face visible in close-ups, full body in long shots). Otherwise return <code>input_quality</code> so the UI asks for specific replacements.</li>
+  <li><b class="tag t-api">API</b>Start the job: <a href="#generate_image">generate_image</a> with <code>task=character_sheet</code> and your prompt (<code>character_sheet.v1</code>).</li>
+  <li><b class="tag t-ai">AI</b>Vision check: one person, face consistent with inputs, face and full body both present. One automatic retry on failure.</li>
+  <li><b class="tag t-store">Store</b>Save the sheet; set <code>review_required: true</code> until the user confirms.</li>
+  <li>Poll with <a href="#get_job">get_job</a>. A durable Mastra run keeps this alive if the app closes.</li>
+</ol>
+</div>
+
+<!-- ============ generate_tryon ============ -->
+<h2 id="generate_tryon">generate_tryon <span class="badge b-plan">phase 10</span></h2>
+<p>Renders the user wearing a chosen top and bottom, from the character sheet plus the garment images. Runs as a job.</p>
+<div class="card">
+<h3>Input</h3>
+<table class="tbl"><tr><th>Field</th><th>Type</th><th>Required</th><th>Notes</th></tr>
+<tr><td>sheet_id</td><td>string</td><td>yes</td><td>Must belong to the caller and be confirmed</td></tr>
+<tr><td>top</td><td>{ product_url | image_id }</td><td>yes</td><td>Product from an earlier search; URL is re-validated against the allow-list</td></tr>
+<tr><td>bottom</td><td>{ product_url | image_id }</td><td>yes</td><td>Same</td></tr>
+<tr><td>outfit_id</td><td>string</td><td>no</td><td>Links the result to a saved outfit</td></tr>
+<tr><td>idempotency_key</td><td>string</td><td>yes</td><td></td></tr></table>
+<h3>Output</h3>
+<pre><code>{ "schema_version": "1", "status": "queued | running | succeeded | failed", "job_id": "job_88e1",
+  "tryon_id": "tr_88e1", "url": "https://&lt;storage&gt;/tryon/88e1.png", "expires_at": "...",
+  "qa": { "score": 0.91, "garments_match": true, "face_match": true, "issues": [] },
+  "attempts": 1,
+  "disclaimer": "AI-generated preview. Shows how the colours and style may look, not how the size will fit." }</code></pre>
+<h3>Workflow</h3>
+<ol class="flow">
+  <li><b class="tag t-guard">Guard</b>JWT; sheet exists, confirmed and owned; consent active; daily cap; idempotency key.</li>
+  <li><b class="tag t-api">API</b>Internal <code>fetch_product_image</code> for the top and the bottom (allow-list, validation, caching).</li>
+  <li><b class="tag t-api">API</b><a href="#generate_image">generate_image</a> with <code>task=tryon</code>: sheet + top + bottom, keeping face, body and pose and changing only the clothing.</li>
+  <li><b class="tag t-ai">AI</b>Vision QA: right garments, right colours, face still matches the sheet. Output score, booleans, <code>issues[]</code>.</li>
+  <li><b class="tag t-validate">Validate</b>On QA failure retry (max 2, feeding <code>issues</code> into the prompt). Retries do not count against the daily cap.</li>
+  <li><b class="tag t-store">Store</b>Save the best attempt with its QA score. If QA never passes, return the best result with the issues so the UI shows "may not be exact".</li>
+</ol>
+</div>
+
+<!-- ============ get_job ============ -->
+<h2 id="get_job">get_job <span class="badge b-plan">phase 9</span></h2>
+<p>Polls a long-running image job (character sheet, try-on).</p>
+<div class="card">
+<h3>Input</h3>
+<table class="tbl"><tr><th>Field</th><th>Type</th><th>Required</th></tr>
+<tr><td>job_id</td><td>string</td><td>yes</td></tr></table>
+<h3>Output</h3>
+<pre><code>{ "job_id": "job_88e1", "kind": "tryon | character_sheet",
+  "status": "queued | running | succeeded | failed", "progress": 0.6,
+  "result": { ... the same shape the originating tool returns ... },
+  "error": null, "updated_at": "..." }</code></pre>
+<h3>Workflow</h3>
+<ol class="flow">
+  <li><b class="tag t-guard">Guard</b>JWT; the job must belong to the caller (<code>NOT_FOUND</code> otherwise, so job ids cannot be probed).</li>
+  <li><b class="tag t-store">Store</b>Read job state from Postgres; no provider call.</li>
+  <li>Return status, progress and, once finished, the result.</li>
+</ol>
+</div>
+
+<!-- ============ internal ============ -->
+<h2 id="internal">Internal functions (not tools)</h2>
+<p>Deliberately not exposed over MCP: fewer tools to secure, version and describe to a model.</p>
+<div class="tbl"><table>
+<tr><th>Function</th><th>What it does</th><th>Why internal</th></tr>
+<tr><td><code>fetch_product_image(product_url | image_url, purpose)</code></td><td>Allow-list and SSRF guard; find the image (JSON-LD, <code>og:image</code>, gallery); download (5 s, 10 MB); validate by sniffing bytes, at least 400 px, not a placeholder; re-encode, strip metadata, cap at 1600 px; save to object storage under a hash key and return <code>{ image_id, url, width, height, quality }</code>. <code>purpose</code> is <code>display</code> or <code>tryon</code> (try-on needs a larger, cleaner image).</td><td>Only <code>search_products</code> and <code>generate_tryon</code> need it, and both run server-side.</td></tr>
+<tr><td><code>split_budget(total_inr)</code></td><td>Top about 45%, bottom about 55%, rounded down to &#8377;10, floor &#8377;600. Pure arithmetic, no network. <code>clamp_to_budget</code> already enforces totals in code.</td><td>No I/O, so a tool call only adds latency and failure modes.</td></tr>
+<tr><td><code>ImageGenProvider.generate(...)</code></td><td>The provider interface behind <code>generate_image</code>; one adapter per provider.</td><td>It is the swap point, not an agent-facing capability.</td></tr>
+<tr><td><code>verify_product(product, spec)</code></td><td>The deterministic matcher described under <a href="#find_products">find_products</a>.</td><td>Runs in the agent service; must never be skippable by a model.</td></tr>
+</table></div>
+
+<!-- ============ mapping ============ -->
+<h2 id="mapping">State to tool mapping</h2>
+<table class="tbl">
+<tr><th>Graph node</th><th>Reads from state</th><th>Calls</th><th>Writes to state</th></tr>
+<tr><td><code>gather_prefs</code></td><td><code>messages</code></td><td>LLM only</td><td><code>prefs</code> (budget, occasion), <code>missing</code></td></tr>
+<tr><td><code>plan_outfits</code></td><td><code>prefs</code>, <code>chosen_style</code>, <code>notes</code>, <code>outfits</code></td><td>LLM; <code>split_budget</code> / <code>clamp_to_budget</code> in code</td><td><code>outfit_specs</code></td></tr>
+<tr><td><code>find_products</code></td><td><code>outfit_specs</code>, <code>prefs.budget_inr</code>, existing <code>outfits</code></td><td><code>search_products</code> x 8, then <code>verify_product</code> on every result</td><td><code>outfits</code> (with reports), <code>notes</code>, <code>rejected</code></td></tr>
+<tr><td><code>rank_and_validate</code></td><td><code>outfits</code>, <code>prefs.budget_inr</code></td><td><code>check_link</code> (final confirmation, phase 3)</td><td><code>outfits</code>, <code>retries</code></td></tr>
+<tr><td>style cards</td><td><code>styles[].image_prompt</code></td><td><code>generate_image</code> (<code>style_preview</code>, pre-generated)</td><td>style image URLs</td></tr>
+<tr><td>Mastra try-on flow</td><td>selected outfit</td><td><code>create_character_sheet</code>, <code>generate_tryon</code>, <code>get_job</code></td><td>Postgres rows, not LangGraph state</td></tr>
+</table>
+
+<h3>One item, end to end</h3>
+<pre><code>plan_outfits writes:   { "category":"bottom", "item":"baggy pants", "color":"peach", "max_price_inr":2000 }
+find_products calls:   search_products(item="baggy pants", category="bottom", color="peach", max_price_inr=2000)
+tool returns:          4 candidates, with page-stated colour, gender, stock and extraction source
+verify_product:        keeps the 3 men's peach pants, rejects "Black Baggy Pants" (color mismatch)
+find_products picks:   best verified, not already used; builds Outfit(top, bottom, total_inr, rationale)
+rank_and_validate:     keeps it if total_inr &lt;= budget_inr and both reports pass; otherwise retries (max 2)</code></pre>
+
+</div>
+</body>
+</html>

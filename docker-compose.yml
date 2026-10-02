@@ -1,0 +1,120 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stylist}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stylist_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-stylist}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stylist}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # The tool server. NO "ports:" on purpose: nothing outside the Docker network can reach it. Other
+  # containers reach it as http://mcp:8001/mcp. It gets only the variables listed here (never the
+  # whole .env), so it holds the PUBLIC key and can verify tokens but never create them.
+  mcp:
+    build: ./services/mcp
+    image: stylist-mcp
+    environment:
+      MCP_HOST: 0.0.0.0              # reachable from other containers; safe because no port is published
+      MCP_ALLOWED_HOSTS: mcp         # the only name other services may use to reach it
+      MCP_JWT_PUBLIC_KEY: ${MCP_JWT_PUBLIC_KEY}
+      SERPAPI_API_KEY: ${SERPAPI_API_KEY}
+      MCP_DAILY_CREDITS_PER_USER: ${MCP_DAILY_CREDITS_PER_USER:-40}
+      MCP_DAILY_CREDITS_GLOBAL: ${MCP_DAILY_CREDITS_GLOBAL:-100}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}   # empty = /metrics switched off
+    read_only: true                  # the container cannot write to its own filesystem
+    tmpfs: [/tmp]
+    cap_drop: [ALL]                  # drop every Linux privilege it does not need
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    pids_limit: 200
+    restart: unless-stopped
+
+  # The API. The only service with a published port (besides the dev database). It holds the
+  # PRIVATE keys (it signs user tokens and the tokens it sends to the tool server); the tool
+  # server above holds only the public half.
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    image: stylist-api
+    depends_on:
+      postgres: { condition: service_healthy }
+      mcp: { condition: service_healthy }
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-stylist}:${POSTGRES_PASSWORD:-stylist_dev_password}@postgres:5432/${POSTGRES_DB:-stylist}
+      MCP_URL: http://mcp:8001/mcp
+      MCP_JWT_PRIVATE_KEY: ${MCP_JWT_PRIVATE_KEY}
+      AUTH_JWT_PRIVATE_KEY: ${AUTH_JWT_PRIVATE_KEY}
+      AUTH_JWT_PUBLIC_KEY: ${AUTH_JWT_PUBLIC_KEY}
+      STYLIST_MODEL: ${STYLIST_MODEL}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      COOKIE_SECURE: "false"         # this local stack is plain http; set "true" behind https
+      ENVIRONMENT: dev
+      BACKEND_MODE: ${BACKEND_MODE:-live}   # "demo" = offline scripted model + mock products (free, for evals)
+      METRICS_TOKEN: ${METRICS_TOKEN:-}     # empty = /metrics switched off
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    pids_limit: 300
+    restart: unless-stopped
+
+  # ---- Local observability (opt in:  docker compose --profile observability up -d) -------------------
+  # Everything is published on 127.0.0.1 only: reachable from this machine, nobody else.
+  # First time: python scripts/init_observability.py   (creates the token Prometheus uses)
+  jaeger:                            # traces: http://localhost:16686  (Mastra sends OTLP to :4318)
+    profiles: [observability]
+    image: jaegertracing/all-in-one:1.62.0
+    environment: { COLLECTOR_OTLP_ENABLED: "true" }
+    ports: ["127.0.0.1:16686:16686", "127.0.0.1:4318:4318"]
+    restart: unless-stopped
+
+  prometheus:                        # metrics: http://localhost:9090
+    profiles: [observability]
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./infra/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    secrets: [metrics_token]
+    extra_hosts: ["host.docker.internal:host-gateway"]   # lets it scrape an API running directly on your machine
+    ports: ["127.0.0.1:9090:9090"]
+    restart: unless-stopped
+
+  grafana:                           # dashboards: http://localhost:3001  (anonymous viewer; admin: see GRAFANA_ADMIN_PASSWORD)
+    profiles: [observability]
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me-locally}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    ports: ["127.0.0.1:3001:3000"]
+    depends_on: [prometheus, jaeger]
+    restart: unless-stopped
+
+secrets:
+  metrics_token:
+    file: ./infra/observability/.secrets/metrics_token
+
+volumes:
+  pgdata:
+  promdata:
+  grafanadata:
