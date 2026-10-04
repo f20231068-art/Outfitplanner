@@ -1,0 +1,14 @@
+.git
+.env
+.env.*
+**/node_modules
+**/.next
+**/.mastra
+**/.data
+services
+docs
+scripts
+infra
+prompts
+apps/mastra/src
+apps/mastra/tsconfig.json

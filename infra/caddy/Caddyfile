@@ -1,0 +1,24 @@
+# The one public door. It serves the web app and the API from the SAME address, so the browser treats them
+# as one site (that is what makes the login cookie work) and there is no cross-site traffic to secure.
+#
+# API_UPSTREAM / WEB_UPSTREAM: where the API and web app are (defaults suit docker compose; Railway sets them).
+# SITE_ADDRESS:  ":80"  -> plain http (local test).  "demo.example.com" -> Caddy gets a free https
+#                certificate by itself.
+{$SITE_ADDRESS::80} {
+	# Only these paths go to the API. /metrics is deliberately NOT here: it stays unreachable from outside.
+	@api path /auth/* /conversations /conversations/* /products/* /admin/* /health
+	handle @api {
+		# flush_interval -1: send streamed chat events immediately instead of buffering them
+		reverse_proxy {$API_UPSTREAM:api:8000} {
+			flush_interval -1
+		}
+	}
+	handle {
+		reverse_proxy {$WEB_UPSTREAM:web:3000}
+	}
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+	}
+}

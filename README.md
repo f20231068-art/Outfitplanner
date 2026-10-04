@@ -45,6 +45,11 @@ tool server and the API. The tool server publishes **no port**, so only the API 
 ```
 The API tests use a real, throwaway Postgres (they skip if Docker's Postgres is not running).
 
+## Deploying
+
+`docker-compose.prod.yml` is the hosted layout (one public door, everything else private), runnable on your
+laptop first and then on a small server. Guide: [docs/deploy.md](docs/deploy.md).
+
 ## Evals, tracing, audit, observability (all local)
 
 Built with Mastra in `apps/mastra`, plus Jaeger, Prometheus and Grafana in Docker. Full guide: [docs/observability.md](docs/observability.md).

@@ -4,6 +4,7 @@
     uv run --project services/mcp python scripts/generate_jwt_keys.py            # create missing pairs
     uv run --project services/mcp python scripts/generate_jwt_keys.py --rotate   # replace ALL pairs
     uv run --project services/mcp python scripts/generate_jwt_keys.py --rotate auth   # replace one
+    uv run --project services/mcp python scripts/generate_jwt_keys.py --out .env.production   # keys for hosting
 
 Two separate pairs, so a token for one purpose can never be accepted for the other:
   mcp   API -> MCP tool server. The API signs (PRIVATE key), the MCP server verifies (PUBLIC key).
@@ -38,9 +39,14 @@ def has_value(text: str, name: str) -> bool:
 
 def main() -> None:
     args = sys.argv[1:]
+    env_file = ENV
+    if "--out" in args:  # write somewhere else (e.g. .env.production, which is git-ignored), leaving .env alone
+        i = args.index("--out")
+        env_file = Path(args[i + 1]).resolve()
+        args = args[:i] + args[i + 2 :]
     rotate = "--rotate" in args
     chosen = [a for a in args if a in PAIRS] or list(PAIRS)
-    text = ENV.read_text(encoding="utf-8") if ENV.exists() else ""
+    text = env_file.read_text(encoding="utf-8") if env_file.exists() else ""
 
     for name in chosen:
         private_var, public_var, purpose = PAIRS[name]
@@ -62,7 +68,7 @@ def main() -> None:
         )
         print(f"{name}: new key pair written (fingerprint {hashlib.sha256(public).hexdigest()[:16]})")
 
-    ENV.write_text(text, encoding="utf-8")
+    env_file.write_text(text, encoding="utf-8")
 
 
 if __name__ == "__main__":
