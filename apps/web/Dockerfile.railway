@@ -1,0 +1,30 @@
+# The web app AND the public door in one container, for hosts that limit how many services a project may have
+# (Railway's small plans). Caddy listens on the public port and sends API paths to the API's private address and
+# everything else to the Next.js app running beside it. Build context: the REPO ROOT.
+#   RAILWAY_DOCKERFILE_PATH=apps/web/Dockerfile.railway
+#
+# Variables to set on the service: PORT=8080 and API_UPSTREAM=<the api service's private address>:8000
+
+FROM node:22-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY apps/web/package.json apps/web/package.json
+COPY apps/mastra/package.json apps/mastra/package.json
+RUN npm ci -w apps/web
+COPY apps/web apps/web
+ARG NEXT_PUBLIC_API_URL=""
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL NEXT_TELEMETRY_DISABLED=1
+RUN npm run build -w apps/web
+
+FROM node:22-slim
+WORKDIR /app
+COPY --from=caddy:2 /usr/bin/caddy /usr/bin/caddy
+COPY infra/caddy/Caddyfile /etc/caddy/Caddyfile
+COPY --from=build --chown=node:node /app /app
+# Caddy keeps small state files; point them somewhere the non-root user may write
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 XDG_DATA_HOME=/tmp XDG_CONFIG_HOME=/tmp \
+    SITE_ADDRESS=:8080 WEB_UPSTREAM=127.0.0.1:3000
+USER node
+EXPOSE 8080
+# Both processes run; if either one stops, the container exits so the host restarts it.
+CMD ["bash", "-c", "node node_modules/next/dist/bin/next start apps/web -H 127.0.0.1 -p 3000 & caddy run --config /etc/caddy/Caddyfile --adapter caddyfile & wait -n; exit 1"]

@@ -62,6 +62,16 @@ Any small Linux machine with Docker (an Oracle Cloud "Always Free" VM, or a chea
 
 Do not set `ENVIRONMENT`/`BACKEND_MODE` on a server: the defaults are production and real mode.
 
+## 3. On Railway (four services: Postgres, mcp, api, web)
+
+Railway's smaller plans cap the number of services per project, and its private network does not cross
+projects, so the door (Caddy) and the web app share one container: `apps/web/Dockerfile.railway`.
+
+* `web` service: `RAILWAY_DOCKERFILE_PATH=apps/web/Dockerfile.railway`, root directory empty,
+  `PORT=8080`, `API_UPSTREAM=<api private address>:8000`. Generate its public domain with port 8080.
+* `api`, `mcp`, `Postgres`: as described in the main steps. Only `web` has a public address.
+* If a separate `caddy` service exists, delete it.
+
 ## Limits and honest notes
 
 * `.env.production` holds every secret in one file. It is git-ignored. On a server, keep it readable by you only

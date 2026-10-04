@@ -69,7 +69,7 @@ class Settings(BaseSettings):
 
     @property
     def jwt_private_key_pem(self) -> str:
-        return self.mcp_jwt_private_key.replace("\\n", "\n").strip()
+        return self.mcp_jwt_private_key.strip().strip("\"'").replace("\\n", "\n").strip()  # some hosts keep the quotes
 
     @property
     def admin_emails_list(self) -> list[str]:
@@ -77,11 +77,11 @@ class Settings(BaseSettings):
 
     @property
     def auth_private_key_pem(self) -> str:
-        return self.auth_jwt_private_key.replace("\\n", "\n").strip()
+        return self.auth_jwt_private_key.strip().strip("\"'").replace("\\n", "\n").strip()
 
     @property
     def auth_public_key_pem(self) -> str:
-        return self.auth_jwt_public_key.replace("\\n", "\n").strip()
+        return self.auth_jwt_public_key.strip().strip("\"'").replace("\\n", "\n").strip()
 
 
 settings = Settings()

@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     @property
     def jwt_public_key_pem(self) -> str:
         """Hosts often store a PEM on one line with literal \\n; turn those back into line breaks."""
-        return self.mcp_jwt_public_key.replace("\\n", "\n").strip()
+        return self.mcp_jwt_public_key.strip().strip("\"'").replace("\\n", "\n").strip()  # some hosts keep the quotes
 
     @property
     def allowed_hosts_list(self) -> list[str]:
