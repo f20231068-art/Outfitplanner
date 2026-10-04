@@ -13,8 +13,12 @@ class PrefsExtraction(BaseModel):
 
     budget_inr: int | None = Field(None, description="Total outfit budget in INR")
     occasion: str | None = Field(None, description="e.g. college, office, party, casual")
+    requests: str | None = Field(
+        None,
+        description="Wishes about the look or garments, in the shopper's words, e.g. 'suits, navy, no black'",
+    )
 
-    @field_validator("budget_inr", "occasion", mode="before")
+    @field_validator("budget_inr", "occasion", "requests", mode="before")
     @classmethod
     def _blank_means_not_stated(cls, v):
         """Models sometimes write 'None' / 'null' / 'unknown' as text instead of a real null."""

@@ -71,10 +71,12 @@ def build_graph(llm, search: ProductSearch, checkpointer=None):
     # ---- nodes -------------------------------------------------------------------------
     def gather_prefs(state: StylistState):
         extracted = structured(
-            PrefsExtraction, load_prompt("extract_prefs"), history=state["messages"]
+            PrefsExtraction, load_prompt("extract_prefs", 2), history=state["messages"]
         )
         prefs = dict(state.get("prefs") or {})
         prefs.update({k: v for k, v in extracted.model_dump().items() if v is not None})
+        if not prefs.get("requests"):
+            prefs.pop("requests", None)
         return {"prefs": prefs, "missing": [f for f in REQUIRED_PREFS if f not in prefs]}
 
     def ask_user(state: StylistState):
@@ -83,9 +85,12 @@ def build_graph(llm, search: ProductSearch, checkpointer=None):
         return {"messages": [AIMessage(question), HumanMessage(answer)]}
 
     def propose_styles(state: StylistState):
-        result = structured(
-            StyleList, load_prompt("propose_styles"), f"Shopper preferences: {state['prefs']}"
+        prefs = state["prefs"]
+        human = (
+            f"Occasion: {prefs.get('occasion')}\nBudget: INR {prefs.get('budget_inr')} for the whole outfit\n"
+            f"The shopper asked for: {prefs.get('requests') or 'nothing specific'}"
         )
+        result = structured(StyleList, load_prompt("propose_styles", 2), human)
         return {"styles": [s.model_dump() for s in result.styles]}
 
     def wait_for_choice(state: StylistState):
@@ -108,7 +113,7 @@ def build_graph(llm, search: ProductSearch, checkpointer=None):
             "already_chosen": [o["rationale"] for o in existing],
             "planner_notes": state.get("notes") or [],
         }
-        plan = structured(OutfitPlan, load_prompt("plan_outfits", 2), json.dumps(context))
+        plan = structured(OutfitPlan, load_prompt("plan_outfits", 3), json.dumps(context))
         specs = [clamp_to_budget(s, budget) for s in plan.outfits[:need]]
         return {"outfit_specs": [s.model_dump() for s in specs], "notes": []}
 
