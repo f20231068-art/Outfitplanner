@@ -8,9 +8,14 @@
 	# Only these paths go to the API. /metrics is deliberately NOT here: it stays unreachable from outside.
 	@api path /auth/* /conversations /conversations/* /products/* /admin/* /health
 	handle @api {
-		# flush_interval -1: send streamed chat events immediately instead of buffering them
 		reverse_proxy {$API_UPSTREAM:api:8000} {
+			# Send streamed chat events immediately instead of buffering them.
 			flush_interval -1
+			# REQUIRED for the chat stream. One agent turn (a model call, then store searches) streams its reply for
+			# 1 to 2 minutes in answer to a POST. Measured (docker, Caddy 2.11): without this, Caddy cuts EVERY
+			# long POST response off at exactly 60 seconds, before the outfits arrive; with it, the same stream runs
+			# to the end. (A GET stream was never affected.) Chat bodies are a few hundred bytes, so buffering them is free.
+			request_buffers 1MB
 		}
 	}
 	handle {

@@ -5,8 +5,8 @@ from fastmcp.exceptions import ToolError
 from mcp_server.config import Settings
 from mcp_server.tools.check_link import all_public, host_allowed, run_check
 
-CFG = Settings(serpapi_api_key="x", _env_file=None)
-GOOD = "https://www.myntra.com/tshirts/x/1/buy"
+CFG = Settings(tavily_api_key="x", _env_file=None)
+GOOD = "https://www.snitch.com/tshirts/x/1/buy"
 
 
 async def public_resolver(host: str) -> list[str]:
@@ -39,7 +39,7 @@ async def test_status_codes_map_to_verdicts(status, verdict, reason):
 
 
 async def test_a_200_page_titled_not_found_is_dead():
-    r = await check(lambda req: httpx.Response(200, text="<title>Page Not Found | Myntra</title>"))
+    r = await check(lambda req: httpx.Response(200, text="<title>Page Not Found | Snitch</title>"))
     assert (r.verdict, r.reason) == ("dead", "soft_404")
 
 
@@ -55,11 +55,11 @@ async def test_timeout_is_unverified_not_dead():
 async def test_follows_a_redirect_within_allowed_hosts():
     def handler(req):
         if req.url.path == "/old":
-            return httpx.Response(301, headers={"location": "https://www.myntra.com/new"})
+            return httpx.Response(301, headers={"location": "https://www.snitch.com/new"})
         return httpx.Response(200, text="<title>ok</title>")
 
-    r = await check(handler, url="https://www.myntra.com/old")
-    assert r.verdict == "live" and r.final_url == "https://www.myntra.com/new"
+    r = await check(handler, url="https://www.snitch.com/old")
+    assert r.verdict == "live" and r.final_url == "https://www.snitch.com/new"
 
 
 async def test_redirect_to_a_host_we_do_not_allow_is_not_followed():
@@ -75,14 +75,14 @@ async def test_redirect_to_a_host_we_do_not_allow_is_not_followed():
 
 
 async def test_redirect_loop_gives_up_after_three_hops():
-    r = await check(lambda req: httpx.Response(302, headers={"location": "https://www.myntra.com/loop"}))
+    r = await check(lambda req: httpx.Response(302, headers={"location": "https://www.snitch.com/loop"}))
     assert r.reason == "too_many_redirects"
 
 
 # ---- the security guards (SSRF) -----------------------------------------------------------
 async def test_refuses_non_https():
     with pytest.raises(ToolError, match="https"):
-        await check(lambda r: httpx.Response(200), url="http://www.myntra.com/x")
+        await check(lambda r: httpx.Response(200), url="http://www.snitch.com/x")
 
 
 async def test_refuses_hosts_not_on_the_allow_list():
@@ -115,10 +115,10 @@ def test_address_classification():
 
 def test_host_matching_cannot_be_fooled_by_lookalike_names():
     d = CFG.allowed_domains
-    assert host_allowed("www.myntra.com", d) and host_allowed("myntra.com", d)
-    assert not host_allowed("evil-myntra.com", d)
-    assert not host_allowed("myntra.com.evil.com", d)
-    assert not host_allowed("notmyntra.com", d)
+    assert host_allowed("www.snitch.com", d) and host_allowed("snitch.com", d)
+    assert not host_allowed("evil-snitch.com", d)
+    assert not host_allowed("snitch.com.evil.com", d)
+    assert not host_allowed("notsnitch.com", d)
 
 
 # ---- DNS rebinding: look the name up once, then connect to exactly that address -----------------
@@ -131,8 +131,8 @@ async def test_the_connection_goes_to_the_checked_ip_with_the_real_name_for_host
 
     await check(handler)
     assert seen["connected_to"] == "104.18.2.2"  # the address we verified, not a fresh lookup
-    assert seen["host_header"] == "www.myntra.com"
-    assert seen["sni"] == "www.myntra.com"  # the TLS certificate is still checked against the real name
+    assert seen["host_header"] == "www.snitch.com"
+    assert seen["sni"] == "www.snitch.com"  # the TLS certificate is still checked against the real name
 
 
 async def test_a_hostile_dns_that_changes_its_answer_cannot_redirect_us_to_an_internal_address():
@@ -158,23 +158,23 @@ async def test_a_hostile_dns_that_changes_its_answer_cannot_redirect_us_to_an_in
 async def test_each_redirect_hop_is_looked_up_and_checked_again():
     def handler(req):
         if req.url.path == "/old":
-            return httpx.Response(301, headers={"location": "https://www.myntra.com/new"})
+            return httpx.Response(301, headers={"location": "https://www.snitch.com/new"})
         return httpx.Response(200, text="<title>ok</title>")
 
     async def second_hop_internal(host, _calls=[]):  # noqa: B006 - small test-only counter
         _calls.append(1)
         return ["104.18.2.2"] if len(_calls) == 1 else ["192.168.1.10"]
 
-    r = await check(handler, url="https://www.myntra.com/old", resolver=second_hop_internal)
+    r = await check(handler, url="https://www.snitch.com/old", resolver=second_hop_internal)
     assert (r.verdict, r.reason) == ("unverified", "redirected_off_domain")
 
 
 def test_pinning_builds_the_right_url_for_ipv4_ipv6_and_ports():
     from mcp_server.tools.check_link import _pin
 
-    assert _pin("https://www.myntra.com/a/b?x=1", "104.18.2.2") == "https://104.18.2.2/a/b?x=1"
-    assert _pin("https://www.myntra.com:8443/a", "104.18.2.2") == "https://104.18.2.2:8443/a"
-    assert _pin("https://www.myntra.com/a", "2606:4700::1") == "https://[2606:4700::1]/a"
+    assert _pin("https://www.snitch.com/a/b?x=1", "104.18.2.2") == "https://104.18.2.2/a/b?x=1"
+    assert _pin("https://www.snitch.com:8443/a", "104.18.2.2") == "https://104.18.2.2:8443/a"
+    assert _pin("https://www.snitch.com/a", "2606:4700::1") == "https://[2606:4700::1]/a"
 
 
 @pytest.mark.parametrize("status", [202, 204])

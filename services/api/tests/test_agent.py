@@ -1,23 +1,40 @@
+import json
+import re
+
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import Command
 
 from api.agent.graph import OUTFITS_WANTED, build_graph, clamp_to_budget
 from api.agent.products import mock_search
 from api.agent.schemas import (
+    AnswerOut,
     ItemSpec,
     OutfitPlan,
     OutfitSpec,
     PrefsExtraction,
+    RefinementEdit,
     StyleList,
     StyleOption,
+    TurnIntent,
 )
 
 
-class FakeLLM:
-    """Scripted stand-in for the chat model: answers each structured-output schema."""
+def _budget_in(text: str) -> int | None:
+    m = re.search(r"\b(\d{3,5})\b", text)
+    return int(m.group(1)) if m else None
 
-    def __init__(self, plan_calls: list | None = None):
+
+class FakeLLM:
+    """Scripted stand-in for the chat model: answers each structured-output schema.
+
+    `intents` / `edits` are queues of scripted answers for the router and the refinement reader.
+    `calls` counts how often each kind of question was asked; `seen` keeps the last prompt of each kind.
+    """
+
+    def __init__(self, plan_calls: list | None = None, intents: list | None = None, edits: list | None = None):
         self.plan_calls = plan_calls if plan_calls is not None else []
+        self.intents, self.edits = list(intents or []), list(edits or [])
+        self.calls: dict[str, int] = {}
+        self.seen: dict[str, str] = {}
 
     def with_structured_output(self, schema, **_kwargs):
         return _Runner(self, schema)
@@ -28,11 +45,15 @@ class _Runner:
         self.llm, self.schema = llm, schema
 
     def invoke(self, messages):
-        text = " ".join(str(m.content) for m in messages).lower()
+        name = self.schema.__name__
+        self.llm.calls[name] = self.llm.calls.get(name, 0) + 1
+        self.llm.seen[name] = str(messages[-1].content)
+        humans = [str(m.content).lower() for m in messages if getattr(m, "type", "") == "human"]
+        text, last = " ".join(humans), (humans[-1] if humans else "")
         if self.schema is PrefsExtraction:
             return PrefsExtraction(
-                budget_inr=4000 if "4000" in text else None,
-                occasion="college" if "college" in text else None,
+                budget_inr=_budget_in(last) or _budget_in(text),
+                occasion=("office" if "office" in last else "college") if ("office" in last or "college" in text) else None,
             )
         if self.schema is StyleList:
             return StyleList(
@@ -41,9 +62,19 @@ class _Runner:
                     for i in range(5)
                 ]
             )
+        if self.schema is TurnIntent:
+            if self.llm.intents:
+                return self.llm.intents.pop(0)
+            context = json.loads(messages[-1].content)
+            return TurnIntent(intent="choose_style" if context["phase"] == "choosing_style" else "refine", style=context["message"])
+        if self.schema is RefinementEdit:
+            return self.llm.edits.pop(0) if self.llm.edits else RefinementEdit(cheaper=True)
+        if self.schema is AnswerOut:
+            return AnswerOut(text="answer")
         if self.schema is OutfitPlan:
             self.llm.plan_calls.append(messages[-1].content)
-            return OutfitPlan(outfits=[_spec(i) for i in range(OUTFITS_WANTED)])
+            shown = len(json.loads(messages[-1].content)["already_shown"])  # later rounds plan different garments
+            return OutfitPlan(outfits=[_spec(shown + i) for i in range(OUTFITS_WANTED)])
         raise AssertionError(f"unexpected schema {self.schema}")
 
 
@@ -59,56 +90,63 @@ def _spec(i, top_cap=2500, bottom_cap=2500):
     )
 
 
-def _run_to_the_end(graph, config, answers):
-    result = graph.invoke({"messages": [("user", "under 4000")]}, config)
-    for answer in answers:
-        assert result.get("__interrupt__"), "expected the graph to pause"
-        result = graph.invoke(Command(resume=answer), config)
-    return result
+def say(graph, config, text, choice=None):
+    """One shopper message (typed, or a clicked style card when `choice` is given). Returns the saved state."""
+    return graph.invoke({"messages": [("user", text)], "choice": choice}, config)
 
 
-def test_full_flow_pauses_for_missing_gender_then_style_choice():
+def _run_to_the_end(graph, config, answers=("college", "s0")):
+    say(graph, config, "under 4000")
+    say(graph, config, answers[0])
+    return say(graph, config, f"Style {answers[1][1:]}", choice=answers[1])
+
+
+def test_full_flow_asks_then_offers_styles_then_plans_outfits():
     graph = build_graph(FakeLLM(), mock_search, MemorySaver())
     config = {"configurable": {"thread_id": "t1"}}
 
-    first = graph.invoke({"messages": [("user", "under 4000")]}, config)
-    assert first["__interrupt__"][0].value["type"] == "ask"  # occasion missing
-    assert "occasion" in first["__interrupt__"][0].value["question"]
+    first = say(graph, config, "under 4000")
+    assert first["phase"] == "gathering"  # occasion missing
+    assert "occasion" in first["pending_question"]
 
-    second = graph.invoke(Command(resume="college"), config)
-    assert second["__interrupt__"][0].value["type"] == "choose_style"
-    assert len(second["__interrupt__"][0].value["styles"]) == 5
+    second = say(graph, config, "college")
+    assert second["phase"] == "choosing_style"
+    assert len(second["styles"]) == 5
 
-    final = graph.invoke(Command(resume="s2"), config)
+    final = say(graph, config, "Style 2", choice="s2")
     assert len(final["outfits"]) == OUTFITS_WANTED
     assert all(o["total_inr"] <= 4000 for o in final["outfits"])
     assert final["chosen_style"]["id"] == "s2"
+    assert final["phase"] == "outfits_shown"
+    assert len(final["shown"]) == OUTFITS_WANTED and {o["round"] for o in final["shown"]} == {1}
 
 
 def test_gender_is_never_asked_for_menswear_only_app():
     graph = build_graph(FakeLLM(), mock_search, MemorySaver())
     config = {"configurable": {"thread_id": "t0"}}
-    first = graph.invoke({"messages": [("user", "college wear under 4000")]}, config)
-    assert first["__interrupt__"][0].value["type"] == "choose_style"  # went straight to styles
+    first = say(graph, config, "college wear under 4000")
+    assert first["phase"] == "choosing_style"  # went straight to styles
 
 
 def test_state_survives_between_calls_via_checkpointer():
     graph = build_graph(FakeLLM(), mock_search, MemorySaver())
     config = {"configurable": {"thread_id": "t2"}}
-    graph.invoke({"messages": [("user", "under 4000")]}, config)
+    say(graph, config, "under 4000")
     saved = graph.get_state(config)
     assert saved.values["prefs"] == {"budget_inr": 4000}
-    assert saved.next == ("ask_user",)
+    assert saved.values["phase"] == "gathering"
+    assert saved.next == ()  # the turn finished; nothing is paused, the next message simply continues
 
 
 def test_empty_search_retries_then_gives_up():
     llm = FakeLLM()
     graph = build_graph(llm, lambda spec: [], MemorySaver())  # search never finds anything
     config = {"configurable": {"thread_id": "t3"}}
-    final = _run_to_the_end(graph, config, ["college", "s0"])
+    final = _run_to_the_end(graph, config)
     assert final["outfits"] == []
     assert len(llm.plan_calls) == 3  # first plan + 2 retries, then it stops
     assert "couldn't find all 4" in final["messages"][-1].content
+    assert final["phase"] == "choosing_style"  # nothing to refine, so the style cards stay on offer
 
 
 def test_retry_only_asks_for_missing_outfits():
@@ -120,7 +158,7 @@ def test_retry_only_asks_for_missing_outfits():
         return [] if calls["n"] <= 4 else mock_search(spec)  # first outfits' searches fail
 
     graph = build_graph(llm, flaky_search, MemorySaver())
-    final = _run_to_the_end(graph, {"configurable": {"thread_id": "t4"}}, ["college", "s0"])
+    final = _run_to_the_end(graph, {"configurable": {"thread_id": "t4"}})
     assert len(final["outfits"]) == OUTFITS_WANTED
     assert len(llm.plan_calls) == 2
 
@@ -175,7 +213,7 @@ def test_prefs_schema_tolerates_text_nulls_and_amount_formats():
         assert parsed.budget_inr is None and parsed.occasion is None
     assert PrefsExtraction(budget_inr="4,000").budget_inr == 4000
     assert PrefsExtraction(budget_inr="Rs 4k").budget_inr == 4000
-    assert PrefsExtraction(budget_inr="\u20b93500").budget_inr == 3500
+    assert PrefsExtraction(budget_inr="₹3500").budget_inr == 3500
     assert PrefsExtraction(budget_inr=4000).budget_inr == 4000
 
 
@@ -199,9 +237,9 @@ def test_a_bad_model_answer_is_retried_then_succeeds():
 
     graph = build_graph(Flaky(), mock_search, MemorySaver())
     cfg = {"configurable": {"thread_id": "flaky"}}
-    res = graph.invoke({"messages": [("user", "college under 4000")]}, cfg)
+    res = say(graph, cfg, "college under 4000")
     assert calls["n"] >= 2
-    assert res["__interrupt__"][0].value["type"] == "choose_style"
+    assert res["phase"] == "choosing_style"
 
 
 def test_a_model_that_never_returns_valid_output_eventually_raises():
@@ -218,4 +256,4 @@ def test_a_model_that_never_returns_valid_output_eventually_raises():
 
     graph = build_graph(Broken(), mock_search, MemorySaver())
     with pytest.raises(OutputParserException):
-        graph.invoke({"messages": [("user", "x")]}, {"configurable": {"thread_id": "broken"}})
+        say(graph, {"configurable": {"thread_id": "broken"}}, "x")

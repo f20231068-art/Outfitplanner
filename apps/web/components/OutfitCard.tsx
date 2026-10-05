@@ -2,13 +2,13 @@
 
 import { useState } from 'react'
 import { ApiError, buyLink } from '../lib/api'
+import { displayTitle, rupees } from '../lib/format'
 import type { Item, Outfit } from '../lib/types'
-
-const rupees = (n: number) => `₹${n.toLocaleString('en-IN')}`
 
 function Piece({ item, label }: { item: Item; label: 'Top' | 'Bottom' }) {
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
+  const [broken, setBroken] = useState(false)
 
   async function buy() {
     setNote(null)
@@ -37,22 +37,35 @@ function Piece({ item, label }: { item: Item; label: 'Top' | 'Bottom' }) {
     }
   }
 
+  const name = displayTitle(item.title)
+  const showImage = item.image_url && !broken
   return (
     <div className="piece">
-      <span className="label">{label}</span>
-      {/* thumbnails come from the store's CDN; no-referrer stops them being blocked as hotlinks */}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={item.image_url} alt={item.title} loading="lazy" referrerPolicy="no-referrer" />
-      <span className="title" title={item.title}>
-        {item.title}
-      </span>
-      <span className="meta">
-        <span className="price">{rupees(item.price_inr)}</span>
-        {item.mrp_inr && item.mrp_inr > item.price_inr ? <s> {rupees(item.mrp_inr)}</s> : null} · {item.retailer}
-      </span>
-      <button className="btn small" onClick={buy} disabled={busy} aria-label={`Buy ${label.toLowerCase()} on ${item.retailer}`}>
-        {busy ? 'Opening…' : 'Buy'}
-      </button>
+      <div className="store">
+        <span>{item.retailer}</span>
+        <span className="kind">{label}</span>
+      </div>
+      <div className="photo">
+        {showImage ? (
+          // thumbnails come from the store's own site; no-referrer stops them being blocked as hotlinks
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={item.image_url} alt={name} loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)} />
+        ) : (
+          <div className="none">
+            <span>No photo available</span>
+            <span>See it on {item.retailer}</span>
+          </div>
+        )}
+        <button className="buy" onClick={buy} disabled={busy} aria-label={`Buy ${label.toLowerCase()} on ${item.retailer}`}>
+          {busy ? 'Opening…' : 'Buy'}
+        </button>
+      </div>
+      <div className="caption">
+        <span className="title" title={name}>
+          {name}
+        </span>
+        <span className="p">{rupees(item.price_inr)}</span>
+      </div>
       {note && (
         <span className="notice" role="status">
           {note}
@@ -62,20 +75,26 @@ function Piece({ item, label }: { item: Item; label: 'Top' | 'Bottom' }) {
   )
 }
 
-export default function OutfitCard({ outfit, index }: { outfit: Outfit; index: number }) {
+export default function OutfitCard({ outfit }: { outfit: Outfit }) {
   return (
-    <article className="outfit" aria-label={`Outfit ${index + 1}`}>
-      <div className="outfit-head">
-        <span className="total">{rupees(outfit.total_inr)}</span>
-        <span className={`badge ${outfit.confidence}`} title="We read the colour from the store listing when it states one">
-          {outfit.confidence === 'high' ? 'Colour confirmed' : 'Colour not confirmed'}
-        </span>
-      </div>
-      <div className="pair">
-        <Piece item={outfit.top} label="Top" />
-        <Piece item={outfit.bottom} label="Bottom" />
-      </div>
+    // not shown on screen, but screen readers announce which outfit this is; shoppers point at one by position
+    <article className="outfit" aria-label={`Outfit ${outfit.position}`}>
+      <Piece item={outfit.top} label="Top" />
+      <Piece item={outfit.bottom} label="Bottom" />
+      <div className="total">{rupees(outfit.total_inr)}</div>
       <p className="rationale">{outfit.rationale}</p>
+      {outfit.confidence === 'low' && <p className="notice">Check the store listing to confirm the details.</p>}
     </article>
+  )
+}
+
+/** Placeholders shown while the outfits are being designed and searched. */
+export function OutfitSkeletons({ count = 4 }: { count?: number }) {
+  return (
+    <div className="outfits" aria-hidden="true">
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} className="skeleton-card" />
+      ))}
+    </div>
   )
 }

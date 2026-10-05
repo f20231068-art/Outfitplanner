@@ -10,35 +10,38 @@ const STYLES = [
 ]
 const done = (outcome: string, stats = { llm_calls: 1, searches: 0, search_errors: 0 }): ApiEvent => ({ event: 'done', data: { outcome, stats, trace_id: 't' } })
 const status = (stage: string, ms: number): ApiEvent => ({ event: 'status', data: { stage, label: stage, duration_ms: ms, elapsed_ms: ms } })
-const askBudget: ApiEvent = { event: 'interrupt', data: { type: 'ask', question: "What's your total budget for the outfit, in rupees?", missing: ['budget_inr'] } }
-const askOccasion: ApiEvent = { event: 'interrupt', data: { type: 'ask', question: "What's the occasion?", missing: ['occasion'] } }
-const chooseStyle: ApiEvent = { event: 'interrupt', data: { type: 'choose_style', styles: STYLES } }
+const askBudget: ApiEvent = { event: 'pending', data: { type: 'ask', question: "What's your total budget for the outfit, in rupees?", missing: ['budget_inr'] } }
+const askOccasion: ApiEvent = { event: 'pending', data: { type: 'ask', question: "What's the occasion?", missing: ['occasion'] } }
+const chooseStyle: ApiEvent = { event: 'pending', data: { type: 'choose_style', styles: STYLES } }
 const outfits: ApiEvent = { event: 'outfits', data: { outfits: [{ id: 'o1', total_inr: 2000, confidence: 'high', rationale: 'r', top: {}, bottom: {} }] } }
 
 /** A stand-in API that plays back one scripted reply per message and remembers what it was sent. */
 function fakeApi(script: ApiEvent[][]) {
   const sent: string[] = []
+  const styleIds: Array<string | undefined> = []
   const traceparents: Array<string | undefined> = []
   const api = {
     createConversation: async () => 'conv-1',
-    sendMessage: async (_id: string, text: string, opts: { traceparent?: string; onEvent?: (e: ApiEvent) => void } = {}): Promise<TurnResponse> => {
+    sendMessage: async (_id: string, text: string, opts: { traceparent?: string; onEvent?: (e: ApiEvent) => void; styleId?: string } = {}): Promise<TurnResponse> => {
       sent.push(text)
+      styleIds.push(opts.styleId)
       traceparents.push(opts.traceparent)
       const events = script[sent.length - 1] ?? [done('ok')]
       events.forEach((e) => opts.onEvent?.(e))
       return { events, traceId: `trace-${sent.length}`, elapsedMs: 5 }
     },
   } as unknown as StylistApi
-  return { api, sent, traceparents }
+  return { api, sent, styleIds, traceparents }
 }
 
 const base: SessionCase = { id: 'c', prompt: 'college under 4000' }
 
 describe('runSession: following the conversation', () => {
   it('goes straight to style choice, picks by position, and collects the outfits', async () => {
-    const { api, sent } = fakeApi([[status('gather_prefs', 20), chooseStyle, done('waiting_for_user')], [status('plan_outfits', 30), outfits, { event: 'message', data: { text: 'Here you go' } }, done('ok', { llm_calls: 1, searches: 8, search_errors: 0 })]])
+    const { api, sent, styleIds } = fakeApi([[status('gather_prefs', 20), chooseStyle, done('waiting_for_user')], [status('plan_outfits', 30), outfits, { event: 'message', data: { text: 'Here you go' } }, done('ok', { llm_calls: 1, searches: 8, search_errors: 0 })]])
     const r = await runSession(api, { ...base, style: 1 })
-    expect(sent).toEqual(['college under 4000', 'smart-casual'])
+    expect(sent).toEqual(['college under 4000', 'Smart Casual']) // the card's name, sent together with its id
+    expect(styleIds).toEqual([undefined, 'smart-casual'])
     expect(r.outcome).toBe('ok')
     expect(r.outfits).toHaveLength(1)
     expect(r.styleNames).toEqual(['Streetwear', 'Smart Casual', 'Minimalist'])
@@ -54,15 +57,15 @@ describe('runSession: following the conversation', () => {
     [{ style: 'no-such-style' }, 'streetwear'], // unknown: falls back to the first
     [{}, 'streetwear'],
   ])('picks the style for %j', async (extra, expected) => {
-    const { api, sent } = fakeApi([[chooseStyle, done('waiting_for_user')], [outfits, done('ok')]])
+    const { api, styleIds } = fakeApi([[chooseStyle, done('waiting_for_user')], [outfits, done('ok')]])
     await runSession(api, { ...base, ...extra })
-    expect(sent[1]).toBe(expected)
+    expect(styleIds[1]).toBe(expected)
   })
 
   it('answers the agent\'s questions from the case and records what was asked, in order', async () => {
     const { api, sent } = fakeApi([[askBudget, done('waiting_for_user')], [askOccasion, done('waiting_for_user')], [chooseStyle, done('waiting_for_user')], [outfits, done('ok')]])
     const r = await runSession(api, { ...base, answers: { budget: 'around 3000', occasion: 'college' } })
-    expect(sent).toEqual(['college under 4000', 'around 3000', 'college', 'streetwear'])
+    expect(sent).toEqual(['college under 4000', 'around 3000', 'college', 'Streetwear'])
     expect(r.asked).toEqual(['budget', 'occasion'])
     expect(r.outcome).toBe('ok')
   })
@@ -103,6 +106,38 @@ describe('runSession: following the conversation', () => {
       const { api } = fakeApi([[done(apiOutcome)]])
       expect((await runSession(api, base)).outcome).toBe(expected)
     }
+  })
+})
+
+describe('runSession: the conversation does not end', () => {
+  const reply = (text: string): ApiEvent => ({ event: 'message', data: { text } })
+  const firstSet = [[chooseStyle, done('waiting_for_user')], [outfits, done('ok')]]
+
+  it('keeps talking after the outfits arrive and records what each follow-up produced', async () => {
+    const newSet: ApiEvent = { event: 'outfits', data: { outfits: [{ id: 'o2', total_inr: 1400, confidence: 'high', rationale: 'r', top: {}, bottom: {} }] } }
+    const { api, sent } = fakeApi([...firstSet, [status('refine', 10), newSet, reply('Here are new outfits'), done('ok', { llm_calls: 2, searches: 8, search_errors: 0 })], [reply('It matches your budget'), done('ok')]])
+    const r = await runSession(api, { ...base, followUps: [{ say: 'cheaper', expect: { outfits: true, budget: 3000 } }, { say: 'why this one?', expect: { outfits: false } }] })
+    expect(sent).toEqual(['college under 4000', 'Streetwear', 'cheaper', 'why this one?'])
+    expect(r.outfits).toHaveLength(1) // result.outfits stays the FIRST set; later sets live in rounds
+    expect(r.rounds.map((x) => [x.said, x.outfits.length, x.reply])).toEqual([['cheaper', 1, 'Here are new outfits'], ['why this one?', 0, 'It matches your budget']])
+    expect(r.rounds[0].expect).toEqual({ outfits: true, budget: 3000 })
+    expect(r.stats.llm_calls).toBe(5) // 1 + 1 + 2 + 1 across every turn, follow-ups included
+    expect(r.stages.some((s) => s.stage === 'refine' && s.turn === 3)).toBe(true)
+    expect(r.outcome).toBe('ok')
+  })
+
+  it('does not send follow-ups when there were no outfits to talk about', async () => {
+    const { api, sent } = fakeApi([[chooseStyle, done('waiting_for_user')], [done('no_outfits')]])
+    const r = await runSession(api, { ...base, followUps: [{ say: 'cheaper' }] })
+    expect(sent).toHaveLength(2)
+    expect(r.rounds).toEqual([])
+  })
+
+  it('records an error in a follow-up without losing the first set', async () => {
+    const { api } = fakeApi([...firstSet, [{ event: 'error', data: { message: 'The assistant is busy right now.' } }, done('error')]])
+    const r = await runSession(api, { ...base, followUps: [{ say: 'cheaper' }] })
+    expect(r.outfits).toHaveLength(1)
+    expect(r.rounds[0].error).toBe('The assistant is busy right now.')
   })
 })
 

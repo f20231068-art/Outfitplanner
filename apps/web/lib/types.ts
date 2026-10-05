@@ -32,7 +32,7 @@ export interface Style {
 }
 
 export type Pending =
-  | { type: 'ask'; question: string; missing: string[] }
+  | { type: 'ask'; question: string }
   | { type: 'choose_style'; styles: Style[] }
 
 export interface ChatMessage {
@@ -51,6 +51,7 @@ export interface ConversationDetail {
   title: string
   messages: ChatMessage[]
   pending: Pending | null
+  phase: 'gathering' | 'choosing_style' | 'outfits_shown' | null
   outfits: Outfit[]
 }
 
@@ -65,7 +66,7 @@ export interface BuyLink {
 // One server-sent event from POST /conversations/{id}/messages
 export type StreamEvent =
   | { event: 'status'; data: { stage: string; label: string } }
-  | { event: 'interrupt'; data: Pending }
+  | { event: 'pending'; data: Pending | null }
   | { event: 'outfits'; data: { outfits: Outfit[] } }
   | { event: 'message'; data: { role: 'assistant'; text: string } }
   | { event: 'error'; data: { message: string } }

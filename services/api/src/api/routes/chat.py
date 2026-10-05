@@ -1,24 +1,28 @@
 """Conversations: start one, send messages, watch the agent work, read history.
 
-A conversation is the LangGraph "thread". Its state (budget, styles, outfits...) is saved in
-Postgres after every step, so the user can answer a question hours later and the agent resumes.
+A conversation is the LangGraph "thread". Its state (preferences, styles, outfits shown...) is saved in
+Postgres after every step. The conversation never ends: every message, typed or a clicked style card, is a new
+turn that the agent routes from the saved state, so the shopper can always answer, change their mind, ask for
+changes ("cheaper", "more like outfit 2") or ask a question.
 
 POST /conversations/{id}/messages answers with a stream of server-sent events:
   status     a step finished       {"stage": "...", "label": "Stores searched"}
-  interrupt  the agent needs input {"type": "ask" | "choose_style", ...}
-  outfits    the finished outfits  {"outfits": [...]}
+  outfits    the finished outfits  {"outfits": [...]}              (only when this turn found new ones)
   message    the agent's reply     {"role": "assistant", "text": "..."}
+  pending    what is on offer now  {"type": "ask", "question": ...} | {"type": "choose_style", "styles": [...]} | null
   error      something failed      {"message": "..."}            (always safe to show)
   done       the turn is over
 """
 
 import logging
+import queue
+import threading
 import time
 import uuid
+from collections.abc import Callable, Iterable, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api import audit, repo
@@ -41,21 +45,20 @@ router = APIRouter(prefix="/conversations", tags=["chat"])
 STAGE_LABELS = {
     "gather_prefs": "Understood your request",
     "propose_styles": "Styles ready",
+    "set_style": "Style chosen",
+    "refine": "Understood your change",
     "plan_outfits": "Outfits designed",
     "find_products": "Stores searched",
     "rank_and_validate": "Every item checked against your request",
+    "answer_question": "Answered your question",
     "respond": "All done",
-}
-# Starting a new round in a finished conversation: forget the previous round's working data
-FRESH_ROUND = {
-    "outfits": [], "outfit_specs": [], "notes": [], "retries": 0, "search_errors": [],
-    "styles": [], "chosen_style": None,
 }
 
 
 class MessageIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str = Field(min_length=1, max_length=500)
+    style_id: str | None = Field(None, max_length=64, description="a clicked style card (skips interpreting the text)")
 
     @field_validator("text")
     @classmethod
@@ -64,6 +67,47 @@ class MessageIn(BaseModel):
         if not v:
             raise ValueError("Say something first.")
         return v
+
+
+HEARTBEAT_S = 10  # a quiet stream gets a keep-alive this often
+BEAT = object()  # what stream_with_heartbeat yields while the work is still running and nothing new has arrived
+KEEP_ALIVE = ": still working\n\n"  # an SSE comment: clients ignore it, but proxies see the connection is alive
+
+
+def stream_with_heartbeat(
+    make_iter: Callable[[], Iterable], on_finish: Callable[[], None], interval: float = HEARTBEAT_S
+) -> Iterator:
+    """Run a slow, blocking iterator in a worker thread and yield its items; yield BEAT whenever `interval` seconds
+    pass with nothing new.
+
+    Why: one agent turn can be silent for a minute (a model call, then searches). A proxy or load balancer between
+    the browser and the API may drop a connection that is silent that long, so the shopper would lose the reply.
+    `on_finish` runs when the work itself ends (even if the browser has gone), so the conversation stays marked
+    busy exactly as long as the agent is really still working on it."""
+    box: queue.Queue = queue.Queue()
+
+    def work() -> None:
+        try:
+            for item in make_iter():
+                box.put(("item", item))
+        except Exception as exc:  # noqa: BLE001 - not swallowed: handed to the consumer, which re-raises it as a safe error event
+            box.put(("error", exc))
+        finally:
+            on_finish()
+            box.put(("end", None))
+
+    threading.Thread(target=work, daemon=True, name="chat-turn").start()
+    while True:
+        try:
+            kind, value = box.get(timeout=interval)
+        except queue.Empty:
+            yield BEAT
+            continue
+        if kind == "end":
+            return
+        if kind == "error":
+            raise value
+        yield value
 
 
 def _valid_id(conversation_id: str) -> str:
@@ -82,10 +126,13 @@ def _owned(request: Request, who: Identity, conversation_id: str) -> dict:
     return row
 
 
-def pending_interrupt(snapshot) -> dict | None:
-    for task in snapshot.tasks:
-        for it in task.interrupts:
-            return it.value
+def pending_from_values(values: dict) -> dict | None:
+    """What the shopper is being offered right now, read from the saved state (there is no paused graph)."""
+    phase = values.get("phase")
+    if phase == "gathering" and values.get("pending_question"):
+        return {"type": "ask", "question": values["pending_question"]}
+    if phase == "choosing_style" and values.get("styles"):
+        return {"type": "choose_style", "styles": values["styles"]}
     return None
 
 
@@ -100,7 +147,8 @@ def _messages(snapshot) -> list[dict]:
 def create(request: Request, who: Identity = Depends(current_user)):
     s = request.app.state
     with s.pool.connection() as conn:
-        if repo.conversations_today(conn, who.user_id) >= s.cfg.daily_conversations_per_user:
+        cap = s.cfg.daily_conversations_per_user
+        if cap > 0 and repo.conversations_today(conn, who.user_id) >= cap:
             raise HTTPException(429, "You have reached today's limit for new conversations. Try again tomorrow.")
         row = repo.create_conversation(conn, who.user_id)
         audit.append(conn, who.user_id, "conversation_created", {"conversation": str(row["id"])})
@@ -123,7 +171,8 @@ def history(conversation_id: str, request: Request, who: Identity = Depends(curr
         outfits = repo.outfits_for_conversation(conn, str(row["id"]), who.user_id)
     return {
         "id": str(row["id"]), "title": row["title"],
-        "messages": _messages(snapshot), "pending": pending_interrupt(snapshot), "outfits": outfits,
+        "messages": _messages(snapshot), "pending": pending_from_values(snapshot.values),
+        "phase": snapshot.values.get("phase"), "outfits": outfits,
     }
 
 
@@ -152,32 +201,36 @@ def send(conversation_id: str, body: MessageIn, request: Request, who: Identity 
     graph = s.graph_factory(who.user_id, stats)
     config = {"configurable": {"thread_id": cid}}
     snapshot = graph.get_state(config)
-    resuming = pending_interrupt(snapshot) is not None
-    payload = Command(resume=body.text) if resuming else {"messages": [("user", body.text)], **FRESH_ROUND}
+    earlier = snapshot.values.get("messages", [])
+    payload = {"messages": [("user", body.text)], "choice": body.style_id}
     request_id = getattr(request.state, "request_id", None)
     trace_id = getattr(request.state, "trace_id", None)
 
     with s.pool.connection() as conn:
-        repo.touch_conversation(conn, cid, title=None if resuming else body.text[:60])
+        repo.touch_conversation(conn, cid, title=None if earlier else body.text[:60])
         # the audit log records THAT a message was sent, never what it said. The trace id links this
         # entry to the trace (Mastra / Jaeger) of the same request.
         audit.append(conn, who.user_id, "message_sent", {
-            "conversation": cid, "length": len(body.text), "resuming": resuming,
+            "conversation": cid, "length": len(body.text), "phase": snapshot.values.get("phase"),
             "request_id": request_id, "trace_id": trace_id,
         })
 
     def events():
-        finished, outcome, delivered = False, "ok", []
+        finished, outcome, delivered = False, "ok", []  # finished: did this turn deliver a new set of outfits
         started = last_mark = time.perf_counter()
         ACTIVE_TURNS.inc()
+        def release() -> None:  # the agent is done with this conversation (or failed): allow the next message
+            with s.active_lock:
+                s.active_conversations.discard(cid)
+
         try:
-            for update in graph.stream(payload, config, stream_mode="updates"):
+            for update in stream_with_heartbeat(lambda: graph.stream(payload, config, stream_mode="updates"), release):
+                if update is BEAT:
+                    yield KEEP_ALIVE
+                    continue
                 now = time.perf_counter()
-                for node, value in update.items():
-                    if node == "__interrupt__":
-                        outcome = "waiting_for_user"
-                        yield sse("interrupt", value[0].value)
-                    elif node in STAGE_LABELS:
+                for node in update:
+                    if node in STAGE_LABELS:
                         # steps run one after another, so the time since the previous update is this step's time
                         ms = round((now - last_mark) * 1000)
                         stats.stages.append({"stage": node, "duration_ms": ms})
@@ -188,9 +241,8 @@ def send(conversation_id: str, body: MessageIn, request: Request, who: Identity 
                         })
                         finished = finished or node == "respond"
                 last_mark = now
-            state = graph.get_state(config)
-            if finished and pending_interrupt(state) is None:
-                values = state.values
+            values = graph.get_state(config).values
+            if finished:
                 with s.pool.connection() as conn:
                     if values.get("outfits"):
                         style = (values.get("chosen_style") or {}).get("name", "")
@@ -208,8 +260,16 @@ def send(conversation_id: str, body: MessageIn, request: Request, who: Identity 
                     yield sse("outfits", {"outfits": delivered})
                 else:
                     outcome = "no_outfits"
-                last = values["messages"][-1]
-                yield sse("message", {"role": "assistant", "text": str(last.content)})
+            reply = next((m for m in reversed(values.get("messages", [])[len(earlier) + 1:]) if m.type == "ai"), None)
+            if reply is not None:
+                yield sse("message", {"role": "assistant", "text": str(reply.content)})
+            pending = pending_from_values(values)
+            if pending is not None and not finished:
+                outcome = "waiting_for_user"  # the turn ended by asking a question or offering style cards
+            yield sse("pending", pending)
+        except GeneratorExit:  # the connection was closed from the other end (the browser left, or a proxy gave up)
+            log.warning("client connection closed %.1fs into the turn (request %s, trace %s)", time.perf_counter() - started, request_id, trace_id)
+            raise
         except Exception as exc:
             outcome = "error"
             log.exception("chat turn failed (request %s)", request_id)
@@ -218,10 +278,8 @@ def send(conversation_id: str, body: MessageIn, request: Request, who: Identity 
                     "conversation": cid, "type": type(exc).__name__, "trace_id": trace_id,
                 })
             yield sse("error", {"message": _friendly(exc)})
-        finally:  # runs even if the browser disconnects mid-stream, so the conversation is never stuck busy
+        finally:  # runs even if the browser disconnects mid-stream (the worker thread frees the conversation itself)
             ACTIVE_TURNS.dec()
-            with s.active_lock:
-                s.active_conversations.discard(cid)
         elapsed = time.perf_counter() - started
         CHAT_TURNS.labels(outcome).inc()
         CHAT_TURN_SECONDS.observe(elapsed)

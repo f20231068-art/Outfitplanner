@@ -11,11 +11,21 @@ Browser (Next.js)                       apps/web
 API  (FastAPI + LangGraph agent)        services/api      ──►  Postgres (users, conversations, outfits, audit log)
    │  a fresh single-use signed token on EVERY request
    ▼
-MCP tool server (private, no public address)   services/mcp   ──►  SerpAPI + retailer pages
+MCP tool server (private, no public address)   services/mcp   ──►  Tavily search over 100 approved menswear stores
 ```
 
 The agent decides *what* to look for (LLM). The tool server *finds* products. A rule-based verifier decides
 whether a product really matches (price, garment, colour, men's, neckline...) and is never skipped.
+
+## How a conversation works
+
+The conversation never ends. Every message, typed or a clicked style card, goes through a router that reads the
+saved state (what was asked, which styles were offered, which outfits were shown) and continues from the right
+step: answer a missing detail, pick or describe a style, **refine** shown outfits ("cheaper", "more like outfit 3,
+but make the bottom purple, under 1500"), change the budget or occasion, ask a question, or start a new request.
+A refinement is turned into a structured edit; code (not the model) resolves "the 3rd one", works out the new
+budget, and applies the change to the search. The planner chooses colours itself for coordination and never shows
+them; a colour you ask for is searched, checked and shown. There are no usage limits unless you configure some.
 
 ## Run it locally
 
@@ -56,7 +66,7 @@ Built with Mastra in `apps/mastra`, plus Jaeger, Prometheus and Grafana in Docke
 
 ```bash
 python scripts/init_observability.py && docker compose --profile observability up -d
-npm run eval                # plays 13 shopper sessions through a traced workflow, scores each with 12 scorers
+npm run eval                # plays 17 shopper sessions (4 of them keep talking after the outfits) through a traced workflow, 13 scorers
 npm run audit:verify        # checks the hash-chained audit record for tampering
 npm run studio              # Mastra Studio: http://localhost:4111  (Jaeger :16686, Grafana :3001)
 (cd apps/mastra && npm test && npx tsc --noEmit)

@@ -23,11 +23,22 @@ It is deliberately long. Nobody should read it in a weekend. Treat it as a cours
 
 You, as a computer-science student aiming at a **Forward Deployed Engineer (FDE)** role, or any AI-application engineering role. An FDE is the engineer who goes to the customer, understands a messy real-world problem, and ships a working AI-powered solution into the customer's environment. That role needs unusual breadth: coding interviews (DSA), AI engineering, backend and data, security, DevOps, system design, and communication. This book covers all of those, and ties them together.
 
+## Start here: the four questions this book is built to answer
+
+Every serious AI-engineering conversation eventually asks these. The book answers each one in full in [Chapter 37](37-the-four-questions.md) (method, evidence in this project, worked example, 90-second spoken answer), and places a short default answer where the topic naturally arises:
+
+| Question | One-line answer | Full answer | Also appears in |
+|---|---|---|---|
+| **Why did the retrieval fail?** | Decide whether retrieval or generation broke, then walk the ladder: query → source → filters → parsing → verification → cache → limits → delivery | [37.1](37-the-four-questions.md#371-why-did-the-retrieval-fail) | Ch. 10, 11, 13 |
+| **How would you evaluate this system?** | Map each promise to a measurement: layers, dataset, deterministic scorers, gates vs signals, calibrated judge, honest statistics, production loop | [37.2](37-the-four-questions.md#372-how-would-you-evaluate-this-system) | Ch. 5, 12, 29 |
+| **What happens when traffic increases 100x?** | Baseline → rates → what breaks first (cost, shared state, provider limits, threads, DB) → actions at 2x/10x/100x → confirm by load test | [37.3](37-the-four-questions.md#373-what-happens-when-traffic-increases-100x) | Ch. 30, 32 |
+| **Why is the model hallucinating?** | Classify the failure → was the truth in the context? → vary one factor → ground, remove the model from factual claims, constrain, verify, measure | [37.4](37-the-four-questions.md#374-why-is-the-model-hallucinating) | Ch. 6, 11 |
+
 ## How the book is organised
 
 | Part | Chapters | What you get |
 |---|---|---|
-| **I. Orientation** | 1 | The whole project in one tour: architecture, one request traced end to end, design principles |
+| **I. Orientation** | 1, 1b | The whole project in one tour (architecture, one request traced end to end, design principles) and the server wiring: the servers, every connection between them, every env file and why it sits where it does, how to rebuild it in order, and the Railway four-service layout |
 | **II. Foundations: programming and DSA** | 2-5 | Mental models, data structures, algorithms, and the math AI engineers actually use. Every structure is tied to code in this repo |
 | **III. AI engineering** | 6-15 | LLMs, prompting, structured output, tool use and MCP, agents and LangGraph, RAG, reliability and verification, evals, observability, cost/latency, the vendor landscape |
 | **IV. The stack AI sits on** | 16-19 | Networking and the web, databases (Postgres), backend engineering (FastAPI), frontend (React/Next.js) |
@@ -41,6 +52,7 @@ You, as a computer-science student aiming at a **Forward Deployed Engineer (FDE)
 
 **Part I: Orientation**
 * [01. The project tour](01-project-tour.md)
+* [01b. How the servers are built and connected (service wiring, env files, build order)](01b-how-the-servers-connect.md)
 
 **Part II: Foundations: programming and DSA**
 * [02. Programming mental models](02-programming-foundations.md)
@@ -90,6 +102,7 @@ You, as a computer-science student aiming at a **Forward Deployed Engineer (FDE)
 * [34. The blueprint: building any AI product](34-blueprint-any-ai-app.md)
 * [35. Question bank](35-question-bank.md)
 * [36. Labs and a study plan](36-labs-and-study-plan.md)
+* [37. The four questions every AI engineer must answer (retrieval failure, evaluation, 100x traffic, hallucination)](37-the-four-questions.md)
 
 **Appendices**
 * [A. Glossary](A-glossary.md)

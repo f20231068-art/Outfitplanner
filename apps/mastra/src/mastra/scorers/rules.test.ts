@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Item, Outfit, SessionResult } from '../stylist/session'
 import {
-  allItemsVerified, askedOnlyWhatIsMissing, callEfficiency, confirmedColourShare, garmentOf, garmentVariety, latency,
-  menswearOnly, noBackendErrors, noDuplicateProducts, outfitCount, priceIntegrity, withinBudget,
+  allItemsVerified, askedOnlyWhatIsMissing, callEfficiency, followUpsHandled, garmentOf, garmentVariety, latency,
+  menswearOnly, noBackendErrors, noDuplicateProducts, outfitCount, priceIntegrity, rationaleHidesColours, shopperWishesHonoured, withinBudget,
 } from './rules'
 
 const item = (title: string, price: number, id: string, ok = true): Item => ({
@@ -20,7 +20,7 @@ const good = (): Outfit[] => [
 ]
 const result = (over: Partial<SessionResult> = {}): SessionResult => ({
   caseId: 'c1', conversationId: 'x', outcome: 'ok', outfits: good(), assistantMessage: 'hi', asked: [], styleNames: [],
-  turns: 2, totalMs: 20_000, stages: [], stats: { llm_calls: 4, searches: 8, search_errors: 0 }, traceIds: [], error: null, ...over,
+  turns: 2, totalMs: 20_000, stages: [], rounds: [], stats: { llm_calls: 4, searches: 8, search_errors: 0 }, traceIds: [], error: null, ...over,
 })
 
 describe('outfitCount', () => {
@@ -124,7 +124,68 @@ describe('conversation and cost', () => {
     expect(callEfficiency(result()).score).toBe(1)
     expect(callEfficiency(result({ stats: { llm_calls: 30, searches: 8, search_errors: 0 } })).score).toBe(0)
   })
-  it('reports the share of store-confirmed colours', () => {
-    expect(confirmedColourShare(result()).score).toBe(0.75)
+})
+
+describe('followUpsHandled', () => {
+  const round = (over = {}) => ({ said: 'cheaper', reply: 'ok', outfits: [outfit(item("Men's Cyan Polo", 500, 'n1'), item("Men's Tan Chinos", 800, 'n2'))], error: null, outcome: 'ok', expect: { outfits: true, budget: 1500 }, ...over })
+
+  it('has nothing to judge when the case has no follow-ups', () => {
+    expect(followUpsHandled(result()).score).toBe(1)
+  })
+  it('passes when a change request delivers new, in-budget, unseen outfits', () => {
+    expect(followUpsHandled(result({ rounds: [round()] })).score).toBe(1)
+  })
+  it('fails a follow-up with an error, no reply, no outfits when expected, or a search when not expected', () => {
+    for (const bad of [{ error: 'boom' }, { reply: null }, { outfits: [] }, { expect: { outfits: false } }]) {
+      expect(followUpsHandled(result({ rounds: [round(bad)] })).score, JSON.stringify(bad)).toBe(0)
+    }
+  })
+  it('fails outfits over the new budget', () => {
+    const v = followUpsHandled(result({ rounds: [round({ expect: { outfits: true, budget: 1000 } })] }))
+    expect(v.score).toBe(0)
+    expect(v.reason).toMatch(/over the new budget of \u20b91000/)
+  })
+  it('fails a product the shopper has already seen, whether in the first set or an earlier follow-up', () => {
+    const seenAgain = round({ outfits: [outfit(item("Men's Navy Polo", 700, 'c'), item("Men's Cyan Chinos", 800, 'zz'))] }) // 'c' was in the first set
+    expect(followUpsHandled(result({ rounds: [seenAgain] })).reason).toMatch(/already shown/)
+    expect(followUpsHandled(result({ rounds: [round(), round()] })).score).toBe(0.5) // the second repeats the first follow-up
+  })
+})
+
+describe('rationaleHidesColours', () => {
+  it('passes explanations about garments and flags ones that spell out a colour', () => {
+    expect(rationaleHidesColours(result()).score).toBe(1)
+    const leaking = good().map((o, i) => (i === 0 ? { ...o, rationale: 'Olive henley with navy trousers' } : o))
+    const v = rationaleHidesColours(result({ outfits: leaking }))
+    expect(v.score).toBe(0.75)
+    expect(v.reason).toMatch(/mention a colour/)
+  })
+})
+
+describe('shopperWishesHonoured', () => {
+  const wishes = { top: ['white|ivory', 't-shirt|tee'], bottom: ['jeans|denim'] }
+  const asked = (outfits: Outfit[]) => shopperWishesHonoured(result({ outfits }), { expect: { wishes } })
+  const ok = () => [
+    outfit(item("Men's White Oversized T-Shirt", 600, 'a'), item("Men's Baggy Denim Jeans", 1400, 'b')),
+    outfit(item('Ivory Boxy Tee', 700, 'c'), item('Wide Leg Jeans', 1300, 'd')),
+  ]
+
+  it('is 1 when every product in the described pieces names what was asked, alternatives included', () => {
+    expect(asked(ok()).score).toBe(1)
+  })
+  it('falls in proportion and names the first misses', () => {
+    const bad = [...ok(), outfit(item('Blue Oversized T-Shirt', 650, 'e'), item('Black Joggers', 1100, 'f'))]
+    const v = asked(bad)
+    expect(v.score).toBeCloseTo(1 - 2 / 9) // 3 outfits x 3 details; the blue tee lacks white|ivory, the joggers lack jeans|denim
+    expect(v.reason).toContain('outfit 3 top')
+  })
+  it('does not apply when the shopper described nothing, and fails with no outfits', () => {
+    expect(shopperWishesHonoured(result(), { expect: {} }).score).toBe(1)
+    expect(shopperWishesHonoured(result(), { expect: { wishes: { top: [] } } }).score).toBe(1)
+    expect(asked([]).score).toBe(0)
+  })
+  it('checks only the piece the shopper described', () => {
+    const onlyBottom = shopperWishesHonoured(result({ outfits: ok() }), { expect: { wishes: { bottom: ['denim'] } } })
+    expect(onlyBottom.score).toBe(0.5) // the second outfit says "Wide Leg Jeans", not denim
   })
 })

@@ -10,46 +10,30 @@ import httpx
 from fastmcp import Client
 
 from mcp_server.config import Settings
-from mcp_server.providers.serpapi import DetailRef, parse_offers, parse_shopping_results
 from mcp_server.server import build_server
+from tests.fakes import FakePages, FakeTavily
 from tests.keys import PUBLIC_PEM
 
-from .test_buy_link import OFFERS
-
-CFG = Settings(serpapi_api_key="x", mcp_jwt_public_key=PUBLIC_PEM, _env_file=None)
+CFG = Settings(tavily_api_key="x", mcp_jwt_public_key=PUBLIC_PEM, _env_file=None)
 NAME_RULE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")  # the spec's allowed tool-name characters
-
-
-class FakeProvider:
-    def __init__(self, response):
-        self.response = response
-
-    async def search(self, query):
-        parsed, skipped = parse_shopping_results(self.response)
-        for p in parsed:
-            p.detail_ref = DetailRef("https://detail.test/x?t=1", p.product.title, p.product.retailer)
-        return parsed, skipped
-
-    async def offers(self, ref):
-        return parse_offers(OFFERS)
 
 
 async def _public(host):
     return ["104.18.2.2"]
 
 
-async def test_every_tool_is_well_formed_and_returns_both_forms(chinos_response):
+async def test_every_tool_is_well_formed_and_returns_both_forms(tavily_response):
     http = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<title>ok</title>")))
-    server = build_server(CFG, provider=FakeProvider(chinos_response), http_client=http, resolver=_public)
+    server = build_server(CFG, provider=FakeTavily(tavily_response), page_reader=FakePages(), http_client=http, resolver=_public)
 
     async with Client(server) as c:
-        found = (await c.call_tool("search_products", {"item": "chinos", "color": "beige", "max_price_inr": 99999})
+        found = (await c.call_tool("search_products", {"item": "polo t-shirt", "color": "blue", "max_price_inr": 99999})
                  ).structured_content
         sample_args = {
             "ping": {},
-            "search_products": {"item": "chinos", "color": "beige", "max_price_inr": 5000},
+            "search_products": {"item": "polo t-shirt", "color": "blue", "max_price_inr": 5000, "store_groups": ["streetwear"]},
             "get_buy_link": {"product_id": found["results"][0]["product_id"]},
-            "check_link": {"url": "https://www.myntra.com/x/1/buy"},
+            "check_link": {"url": "https://www.snitch.com/products/x"},
         }
         tools = await c.list_tools()
         names = [t.name for t in tools]

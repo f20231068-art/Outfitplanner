@@ -399,4 +399,4 @@ Real examples from this repo's history: a script that wrote a rupee sign crashed
 2. Rewrite `find_products_for_specs`'s parallel search using `asyncio.gather` instead of `ThreadPoolExecutor`. What must change in `McpProductSearch`? (Hint: remove `asyncio.run`.)
 3. Create a race: write a script where 100 threads each do `counter += 1` 10,000 times with no lock, then add a lock and compare.
 4. Add a `bool` setting to `config.py`, set it through `.env` and through a real environment variable, and prove which one wins.
-5. In `sse.ts`, change `{ stream: true }` to `{ stream: false }` and write a test where a `₹` is split across two chunks. Watch it fail.
+5. In `apps/web/lib/sse.ts`, change `{ stream: true }` to `{ stream: false }` and run `npm test -w apps/web`. The existing test "keeps unicode (the rupee sign) intact even when a character is split between chunks" should fail; explain exactly why, then restore the line.

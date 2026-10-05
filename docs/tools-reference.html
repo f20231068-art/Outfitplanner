@@ -174,8 +174,8 @@ ol.flow li::before{content:counter(s);position:absolute;left:-14px;top:8px;width
 <ul>
   <li>Product fields come only from scraped page data. A model never writes or fills in a product.</li>
   <li>Each verdict records its <b>evidence</b>. No evidence means <code>unknown</code>, never <code>match</code>.</li>
-  <li><b>Required</b> to be <code>match</code>: price and item. A <code>mismatch</code> on any attribute, including a colour that contradicts the request, rejects the product. Fit, fabric, category and gender may be <code>unknown</code> but not contradicted.</li>
-  <li><b>Colour rule:</b> colour is looked up in the page's colour field, then the title and description (free, no extra search credits). If neither states a colour, the product is accepted on the strength of the colour-specific search, marked <code>assumed: true</code>, the report gets <code>confidence: "low"</code>, and it ranks below confirmed products. The reply to the user says "colour not confirmed by the store".</li>
+  <li><b>Required</b> to be <code>match</code>: price and item. A <code>mismatch</code> on any attribute, including a colour the <b>shopper</b> asked for that the listing contradicts, rejects the product. Fit, fabric, category and gender may be <code>unknown</code> but not contradicted.</li>
+  <li><b>Colour rule:</b> colour is checked <b>only when the shopper asked for it</b> (<code>color_source: "user"</code>, e.g. "make the bottom purple"). The planner's own colours (<code>color_source: "planner"</code>) are a hidden hint for coordination: they steer the search but are never checked, rejected, ranked or shown. For a shopper colour: it is looked up in the page's colour field, then the title and description (free, no extra search credits); if neither states one, the product is accepted on the strength of the colour-specific search, marked <code>assumed: true</code>, the report gets <code>confidence: "low"</code>, and it ranks below confirmed products.</li>
   <li>Rejected candidates are returned with reasons, never silently dropped.</li>
   <li><code>rank_and_validate</code> re-checks that every outfit item carries a passing report before the user sees it.</li>
 </ul>
@@ -183,7 +183,7 @@ ol.flow li::before{content:counter(s);position:absolute;left:-14px;top:8px;width
 <h3>Input schema (<code>FindProductsInput</code>)</h3>
 <div class="tbl"><table>
 <tr><th>Field</th><th>Type</th><th>Notes</th></tr>
-<tr><td>specs</td><td>OutfitSpec[]</td><td>Each has <code>top</code> and <code>bottom</code> <code>ItemSpec</code> (category, item, color, fit?, fabric?, max_price_inr) and a <code>rationale</code></td></tr>
+<tr><td>specs</td><td>OutfitSpec[]</td><td>Each has <code>top</code> and <code>bottom</code> <code>ItemSpec</code> (category, item, color?, color_source, fit?, fabric?, max_price_inr) and a <code>rationale</code></td></tr>
 <tr><td>budget_inr</td><td>integer</td><td>Total outfit budget; top + bottom must fit</td></tr>
 <tr><td>exclude_urls</td><td>string[]</td><td>Products already used in earlier outfits (default empty)</td></tr>
 </table></div>
@@ -212,7 +212,7 @@ ol.flow li::before{content:counter(s);position:absolute;left:-14px;top:8px;width
 <tr><td>price</td><td>&lt;= 2000</td><td>1500</td><td>match</td><td>price field</td><td>yes</td></tr>
 <tr><td>item</td><td>baggy pants</td><td>baggy pants</td><td>match</td><td>all item words found in title/description</td><td>yes</td></tr>
 <tr><td>category</td><td>bottom</td><td>bottom</td><td>match</td><td>page category</td><td>blocks on mismatch</td></tr>
-<tr><td>color</td><td>peach</td><td>Peach</td><td>match</td><td>page color field</td><td>rejects if contradicted</td></tr>
+<tr><td>color (shopper-requested only)</td><td>peach</td><td>Peach</td><td>match</td><td>page color field</td><td>rejects if contradicted</td></tr>
 <tr><td>color (not stated)</td><td>peach</td><td>(none)</td><td>unknown, <code>assumed</code></td><td>trusted from the colour-specific search; <code>confidence: low</code></td><td>no</td></tr>
 <tr><td>gender</td><td>men</td><td>men</td><td>match</td><td>page gender field</td><td>blocks on mismatch</td></tr>
 <tr><td>fit</td><td>baggy</td><td>(none)</td><td>unknown</td><td>not stated on the page</td><td>blocks on mismatch</td></tr>
@@ -227,11 +227,12 @@ ol.flow li::before{content:counter(s);position:absolute;left:-14px;top:8px;width
   <li><b class="tag t-validate">Validate</b>Build an outfit only if both items verified and <code>top + bottom &lt;= budget_inr</code>; otherwise add an <code>unfilled</code> entry.</li>
   <li><b class="tag t-store">Store</b>The graph saves <code>outfits</code>, planner <code>notes</code> (from <code>unfilled</code>) and <code>rejected</code>. The planner uses the notes to propose alternatives (max 2 retries).</li>
 </ol>
-<div class="note"><b>Measured on 319 real SerpAPI Shopping results (8 menswear queries).</b> Colour is stated in the title for only about 11% of products, so under the old strict rule only 11% passed. With the assumed-colour fallback, 54% are usable: 11% confirmed (high confidence) and 43% assumed (low confidence), giving 10 to 38 usable results per query. Reading the colour from the thumbnail by pixels was only 35% accurate and is not used. Fetching the retailer page (free) can confirm colour, gender and stock: Myntra pages embed them; other retailers are untested. Synonym and colour word lists are small.</div>
+<div class="note"><b>Historical (SerpAPI Google Shopping, before the move to Tavily): measured on 319 real results (8 menswear queries).</b> Colour is stated in the title for only about 11% of products, so under the old strict rule only 11% passed. With the assumed-colour fallback, 54% are usable: 11% confirmed (high confidence) and 43% assumed (low confidence), giving 10 to 38 usable results per query. Reading the colour from the thumbnail by pixels was only 35% accurate and is not used. Fetching the retailer page (free) can confirm colour, gender and stock: Myntra pages embed them; other retailers are untested. Synonym and colour word lists are small.</div>
 </div>
 
 <!-- ============ search_products ============ -->
 <h2 id="search_products">search_products <span class="badge b-plan">phase 3</span></h2>
+<div class="note"><b>Updated 2026-10-05.</b> Search now runs on Tavily, restricted to 100 approved menswear brands in five groups, with one search per garment covering every store in the chosen <code>store_groups</code>. Results are the stores' own product pages (<code>url_kind</code> is always <code>retailer</code>), the price is read from the page, and <code>get_buy_link</code> costs no credit. Details and the parameters used: <code>docs/search.md</code>. The SerpAPI-specific measurements and examples further down are historical.</div>
 <p>Retrieval only. Finds candidate men's products for <b>one</b> item and extracts their data. It does not decide whether a candidate matches the request; <code>find_products</code> does. The server always adds "men" to the query.</p>
 <div class="card">
 <h3>Input schema</h3>
@@ -239,7 +240,7 @@ ol.flow li::before{content:counter(s);position:absolute;left:-14px;top:8px;width
 <tr><th>Field</th><th>Type</th><th>Required</th><th>Notes</th></tr>
 <tr><td>item</td><td>string</td><td>yes</td><td>"t-shirt", "baggy pants"</td></tr>
 <tr><td>category</td><td>"top" | "bottom"</td><td>yes</td><td></td></tr>
-<tr><td>color</td><td>string</td><td>yes</td><td>"light blue"</td></tr>
+<tr><td>color</td><td>string</td><td>no</td><td>"light blue" (leave out to search every colour)</td></tr>
 <tr><td>max_price_inr</td><td>integer</td><td>yes</td><td>Used to bias the query and drop obvious misses</td></tr>
 <tr><td>fit, fabric</td><td>string</td><td>no</td><td></td></tr>
 <tr><td>retailers</td><td>string[]</td><td>no</td><td>Subset of the allow-list; default all</td></tr>

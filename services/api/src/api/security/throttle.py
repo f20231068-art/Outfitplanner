@@ -15,7 +15,7 @@ class TooManyAttempts(Exception):
 
 
 class SlidingWindow:
-    """At most `limit` events per `window_s` seconds per key. check() records the event."""
+    """At most `limit` events per `window_s` seconds per key (0 = unlimited). check() records the event."""
 
     def __init__(self, limit: int, window_s: int, clock=time.time):
         self.limit, self.window_s, self._clock = limit, window_s, clock
@@ -28,6 +28,8 @@ class SlidingWindow:
         return events
 
     def check(self, key: str) -> None:
+        if self.limit <= 0:  # 0 = no limit
+            return
         now = self._clock()
         events = self._trim(key, now)
         if len(events) >= self.limit:

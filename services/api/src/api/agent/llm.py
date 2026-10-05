@@ -39,6 +39,8 @@ def get_llm(cfg: Settings = settings) -> ChatOpenAI:
             api_key=cfg.openrouter_api_key,
             base_url=cfg.openrouter_base_url,
             default_headers={"X-Title": "AI Stylist"},  # optional, shows the app on OpenRouter
+            timeout=cfg.llm_timeout_s,
+            max_retries=cfg.llm_max_retries,
             **_http_clients(cfg),
         )
 
@@ -56,6 +58,8 @@ def get_llm(cfg: Settings = settings) -> ChatOpenAI:
             api_key=cfg.opencode_api_key,
             base_url=cfg.opencode_base_url,
             use_responses_api=(mode == "responses"),
+            timeout=cfg.llm_timeout_s,
+            max_retries=cfg.llm_max_retries,
             **_http_clients(cfg),
         )
 

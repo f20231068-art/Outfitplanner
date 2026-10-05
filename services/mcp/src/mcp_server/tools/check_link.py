@@ -38,7 +38,8 @@ Resolver = Callable[[str], Awaitable[list[str]]]
 
 async def default_resolver(host: str) -> list[str]:
     infos = await asyncio.get_running_loop().getaddrinfo(host, 443, type=socket.SOCK_STREAM)
-    return sorted({info[4][0] for info in infos})
+    # IPv4 first: the outbound client is pinned to IPv4 (some networks stall on IPv6), so an IPv6 first answer would fail
+    return sorted({info[4][0] for info in infos}, key=lambda a: (":" in a, a))
 
 
 def host_allowed(host: str, domains: tuple[str, ...]) -> bool:

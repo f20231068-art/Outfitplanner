@@ -22,8 +22,10 @@ from mcp_server.config import Settings, settings
 from mcp_server.limits import CreditLedger, LimitExceeded, RateLimiter
 from mcp_server.metrics import CACHE, CREDITS, LIMIT_HITS, tracked
 from mcp_server.net import UpstreamError, make_client
-from mcp_server.providers.serpapi import SerpApiShopping
+from mcp_server.providers.page_facts import read_page
+from mcp_server.providers.tavily import TavilySearch
 from mcp_server.schemas import BuyLinkResult, LinkCheckResult, SearchProductsResult
+from mcp_server.sellers import GROUP_LABELS, StoreGroup
 from mcp_server.tools.buy_link import run_buy_link
 from mcp_server.tools.check_link import default_resolver, run_check
 from mcp_server.tools.search_products import run_search
@@ -64,36 +66,35 @@ class LimitedProvider:
     def __init__(self, inner, ledger: CreditLedger):
         self._inner, self._ledger = inner, ledger
 
-    def _spend(self, kind: str) -> None:
+    def _spend(self, kind: str, credits: int) -> None:
         try:
-            self._ledger.spend(caller_id(), 1)
+            self._ledger.spend(caller_id(), credits)
         except LimitExceeded:
             LIMIT_HITS.labels("daily_credits").inc()
             raise
-        CREDITS.labels(kind).inc()
+        CREDITS.labels(kind).inc(credits)
 
-    async def search(self, query: str):
-        self._spend("search")
-        return await self._inner.search(query)
-
-    async def offers(self, ref):
-        self._spend("buy_link")
-        return await self._inner.offers(ref)
+    async def search(self, query: str, domains: list[str]):
+        # an "advanced" Tavily search costs 2 credits; the provider knows its own price
+        self._spend("search", getattr(self._inner, "credits_per_search", 1))
+        return await self._inner.search(query, domains)
 
 
 def build_server(
-    cfg: Settings = settings, provider=None, http_client=None, resolver=None
+    cfg: Settings = settings, provider=None, http_client=None, resolver=None, page_reader=None
 ) -> FastMCP:
-    """Factory so tests can inject a fake provider, HTTP client and DNS resolver (no network)."""
+    """Factory so tests can inject a fake provider, page reader, HTTP client and DNS resolver (no network)."""
     # Fails closed: raises if the JWT public key is missing, so the server can never run open.
     mcp = FastMCP("stylist-tools", auth=build_verifier(cfg))
     http_client = http_client or make_client(cfg)
     ledger = CreditLedger(cfg.mcp_daily_credits_per_user, cfg.mcp_daily_credits_global)
     limiter = RateLimiter(cfg.mcp_rate_limit_per_min)
-    provider = LimitedProvider(provider or SerpApiShopping(cfg, http_client), ledger)
+    provider = LimitedProvider(provider or TavilySearch(cfg, http_client), ledger)
     search_cache = TTLCache(cfg.search_cache_ttl_s)
-    detail_refs = TTLCache(cfg.search_cache_ttl_s, max_items=5000)  # product_id -> how to look it up
-    link_cache = TTLCache(cfg.search_cache_ttl_s)
+    product_refs = TTLCache(cfg.search_cache_ttl_s, max_items=5000)  # product_id -> the product (for get_buy_link)
+    facts_cache = TTLCache(cfg.search_cache_ttl_s, max_items=5000)  # page url -> what the page states
+    failed_cache = TTLCache(600, max_items=5000)  # page url -> True: could not be read, do not retry for 10 minutes
+    read = page_reader or (lambda url: read_page(url, cfg, http_client, resolver or default_resolver))
 
     def upstream_error(exc: UpstreamError) -> ToolError:
         return ToolError(f"{exc}." + (" You can retry." if exc.retryable else ""))
@@ -131,16 +132,36 @@ def build_server(
     @mcp.tool(annotations=READ_ONLY)
     async def search_products(
         item: Annotated[str, Field(description="Garment to find, e.g. 't-shirt', 'cargo pants', 'chinos'")],
-        color: Annotated[str, Field(description="Colour wanted, e.g. 'olive green'. Always part of the search")],
         max_price_inr: Annotated[int, Field(description="Highest price for this single item, in rupees", gt=0)],
         fit: Annotated[str | None, Field(description="e.g. 'oversized', 'slim'")] = None,
+        color: Annotated[
+            str | None, Field(description="Colour to search for, e.g. 'olive green'. Optional: leave out to search every colour")
+        ] = None,
         fabric: Annotated[str | None, Field(description="e.g. 'cotton', 'linen'")] = None,
+        keywords: Annotated[
+            str | None,
+            Field(
+                max_length=120,
+                description="Optional extra search words (a synonym or style word, 2-6 words), for a second try when "
+                "the first search found too little, e.g. 'boxy drop shoulder'",
+            ),
+        ] = None,
+        store_groups: Annotated[
+            list[StoreGroup] | None,
+            Field(
+                description="Which groups of approved stores to search; leave out for all. One search covers "
+                "every store in the chosen groups, so choose the groups that sell this garment. "
+                + "; ".join(f"{k}: {v}" for k, v in GROUP_LABELS.items())
+            ),
+        ] = None,
         limit: Annotated[int, Field(description="Max products to return", ge=1, le=40)] = 20,
     ) -> SearchProductsResult:
         """Find men's clothing products in India for ONE garment (a top or a bottom, not a full outfit).
 
-        Returns candidate products (title, store, price, link, image) from Indian retailers such as
-        Myntra, Amazon.in, Flipkart and AJIO. Candidates are NOT checked against the request: a
+        Searches ONLY our approved menswear brands (D2C, heritage and ethnic specialists), restricted to the chosen
+        store groups, with a single search that covers all of those stores, then reads each candidate store page for
+        its price, image and stock. Returns candidate products (title, store, price, the store's own link, image,
+        stock) exactly as the stores' pages state them; sold-out and unreadable pages are left out. Candidates are NOT checked against the request: a
         product may be the wrong colour or fit, so the caller must verify. Results may be empty.
         Each product has a product_id that stays valid for about 6 hours (pass it to get_buy_link).
         """
@@ -148,9 +169,10 @@ def build_server(
             throttle()
             try:
                 result = await run_search(
-                    provider, search_cache, detail_refs, cfg,
+                    provider, search_cache, product_refs, cfg,
                     item=item, color=color, max_price_inr=max_price_inr,
-                    fit=fit, fabric=fabric, limit=limit,
+                    fit=fit, fabric=fabric, keywords=keywords, store_groups=store_groups, limit=limit,
+                    page_reader=read, facts_cache=facts_cache, failed_cache=failed_cache,
                 )
             except UpstreamError as exc:
                 raise upstream_error(exc) from exc
@@ -161,17 +183,15 @@ def build_server(
     async def get_buy_link(
         product_id: Annotated[str, Field(description="The product_id from a search_products result")],
     ) -> BuyLinkResult:
-        """Get the store's own product page (and stock) for one product from search_products.
+        """Get the store's own product page for one product from search_products. Costs no search credit.
 
-        Search results only link to a Google Shopping page; call this when the user wants to buy.
-        It costs one search credit, so call it only for products the user actually picks.
-        product_id is valid for about 6 hours after the search; after that it fails with an
-        'expired' error and the search must be repeated.
+        Call this when the user wants to buy. product_id is valid for about 6 hours after the search; after
+        that it fails with an 'expired' error and the search must be repeated.
         """
         with tracked("get_buy_link"):
             throttle()
             try:
-                result = await run_buy_link(provider, detail_refs, link_cache, cfg, product_id)
+                result = await run_buy_link(product_refs, cfg, product_id)
             except UpstreamError as exc:
                 raise upstream_error(exc) from exc
             CACHE.labels("get_buy_link", "hit" if result.from_cache else "miss").inc()

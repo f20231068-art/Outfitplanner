@@ -28,7 +28,7 @@ async function runCase(c: (typeof cases)[number]): Promise<{ result: SessionResu
   if (res.status !== 'success') {
     const raw = res.status === 'failed' ? (res as { error?: unknown }).error : undefined
     const error = raw instanceof Error ? raw.message : raw ? JSON.stringify(raw) : `workflow ${res.status}`
-    return { result: { caseId: c.id, conversationId: null, outcome: 'error', outfits: [], assistantMessage: null, asked: [], styleNames: [], turns: 0, totalMs: 0, stages: [], stats: { llm_calls: 0, searches: 0, search_errors: 0 }, traceIds: [], error }, traceId: res.traceId }
+    return { result: { caseId: c.id, conversationId: null, outcome: 'error', outfits: [], assistantMessage: null, asked: [], rounds: [], styleNames: [], turns: 0, totalMs: 0, stages: [], stats: { llm_calls: 0, searches: 0, search_errors: 0 }, traceIds: [], error }, traceId: res.traceId }
   }
   return { result: res.result as unknown as SessionResult, traceId: res.traceId }
 }

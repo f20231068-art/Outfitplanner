@@ -16,7 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / ".env.production"
-COPY_FROM_DOTENV = ["STYLIST_MODEL", "OPENROUTER_API_KEY", "SERPAPI_API_KEY", "ADMIN_EMAILS"]
+COPY_FROM_DOTENV = ["STYLIST_MODEL", "OPENROUTER_API_KEY", "TAVILY_API_KEY", "ADMIN_EMAILS"]
 
 
 def values(path: Path) -> dict[str, str]:
@@ -47,7 +47,7 @@ def main() -> None:
         text = TARGET.read_text(encoding="utf-8").rstrip("\n")
         TARGET.write_text(text + "\n\n" + "\n".join(f"{k}={v}" for k, v in new.items()) + "\n", encoding="utf-8")
     print("added:", ", ".join(new) or "nothing (already complete)")
-    missing = [k for k in ("OPENROUTER_API_KEY", "SERPAPI_API_KEY") if not (have.get(k) or new.get(k))]
+    missing = [k for k in ("OPENROUTER_API_KEY", "TAVILY_API_KEY") if not (have.get(k) or new.get(k))]
     if missing:
         print("still empty (fill in by hand):", ", ".join(missing))
 

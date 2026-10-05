@@ -32,11 +32,16 @@ def product_from_tool_result(item: dict) -> Product:
         mrp_inr=item.get("mrp_inr"),
         url=item["url"],
         url_kind=item.get("url_kind"),
-        image_url=item["image_url"],
+        image_url=item.get("image_url") or "",
+        description=item.get("description") or "",
+        details=item.get("details") or "",
+        relevance=item.get("relevance"),
+        in_stock=item.get("in_stock"),
+        attributes=item.get("attributes") or {},
         rating=item.get("rating"),
         reviews=item.get("reviews"),
         delivery=item.get("delivery"),
-        extraction=item.get("extraction", "shopping_api"),
+        extraction=item.get("extraction", "store_page"),
     )
 
 
@@ -59,11 +64,13 @@ class McpProductSearch:
     async def _search(self, spec: ItemSpec) -> list[Product]:
         args = {
             "item": spec.item,
-            "color": spec.color,
             "max_price_inr": spec.max_price_inr,
             "limit": self.limit,
+            **({"color": spec.color} if spec.color else {}),
+            **({"store_groups": spec.store_groups} if spec.store_groups else {}),  # one search covers these stores
             **({"fit": spec.fit} if spec.fit else {}),
             **({"fabric": spec.fabric} if spec.fabric else {}),
+            **({"keywords": spec.keywords} if spec.keywords else {}),
         }
         for attempt in range(ATTEMPTS):
             try:

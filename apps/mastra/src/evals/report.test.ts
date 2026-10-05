@@ -14,7 +14,7 @@ const outfit = (i: number, garment: string): Outfit => {
 }
 const healthy = (): SessionResult => ({
   caseId: 'college-4000', conversationId: 'c', outcome: 'ok', outfits: [0, 1, 2, 3].map((i) => outfit(i, 'Olive')),
-  assistantMessage: 'ok', asked: [], styleNames: [], turns: 2, totalMs: 9000, stages: [],
+  assistantMessage: 'ok', asked: [], rounds: [], styleNames: [], turns: 2, totalMs: 9000, stages: [],
   stats: { llm_calls: 4, searches: 8, search_errors: 0 }, traceIds: [], error: null,
 })
 const college = cases.find((c) => c.id === 'college-4000')!
@@ -73,10 +73,10 @@ describe('the pass/fail gate can really fail', () => {
   it('does NOT fail the run for a soft quality signal, only reports it', () => {
     const r = healthy()
     r.totalMs = 500_000 // far too slow, but speed is informational
-    r.outfits.forEach((o) => (o.confidence = 'low'))
+    r.outfits.forEach((o) => (o.rationale = 'Olive henley with navy trousers')) // spells out colours: informational
     expect(gateFailures([rowFor(r)])).toEqual([])
     expect(scoreCase(r, college).latency.score).toBe(0)
-    expect(scoreCase(r, college).colour.score).toBe(0)
+    expect(scoreCase(r, college).hidden.score).toBe(0)
   })
 })
 
@@ -94,6 +94,12 @@ describe('the dataset itself', () => {
     for (const c of cases) for (const field of c.expect?.asks ?? []) expect(c.answers?.[field], `${c.id} needs an answer for ${field}`).toBeTruthy()
   })
 
+  it('includes conversations that continue after the outfits, each follow-up stating what it expects', () => {
+    const withFollowUps = cases.filter((c) => c.followUps?.length)
+    expect(withFollowUps.length).toBeGreaterThanOrEqual(3)
+    for (const c of withFollowUps) for (const f of c.followUps!) expect(f.expect?.outfits, `${c.id}: "${f.say}"`).toBeDefined()
+  })
+
   it('covers complete, partial and empty requests', () => {
     const askCounts = new Set(cases.map((c) => c.expect?.asks?.length))
     expect([...askCounts].sort()).toEqual([0, 1, 2])
@@ -101,8 +107,8 @@ describe('the dataset itself', () => {
 
   it('has a gate column for every hard guarantee and nothing soft is gated', () => {
     const gated = COLUMNS.filter((c) => c.gate).map((c) => c.key)
-    expect(gated).toEqual(expect.arrayContaining(['budget', 'verified', 'men', 'dupes', 'price', 'asks', 'errors', 'count']))
+    expect(gated).toEqual(expect.arrayContaining(['budget', 'verified', 'men', 'dupes', 'price', 'asks', 'errors', 'count', 'variety', 'follow']))
     expect(gated).not.toContain('latency')
-    expect(gated).not.toContain('colour')
+    expect(gated).not.toContain('hidden')
   })
 })

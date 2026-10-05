@@ -34,7 +34,7 @@ export default function LoginPage() {
     <main className="auth">
       <form className="auth-card" onSubmit={submit} noValidate>
         <div>
-          <h1>AI Stylist</h1>
+          <h1>Outfitmaxxing</h1>
           <p className="sub">Menswear outfits from Indian stores, matched to your budget.</p>
         </div>
         <h2 style={{ fontSize: '1.1rem' }}>{mode === 'login' ? 'Log in' : 'Create an account'}</h2>

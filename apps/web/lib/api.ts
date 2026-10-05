@@ -112,10 +112,11 @@ export async function buyLink(productId: string): Promise<BuyLink> {
 }
 
 /** Send a message and receive the agent's progress as it happens. */
-export async function* sendMessage(conversationId: string, text: string): AsyncGenerator<StreamEvent> {
+export async function* sendMessage(conversationId: string, text: string, styleId?: string): AsyncGenerator<StreamEvent> {
   const r = await request(`/conversations/${conversationId}/messages`, {
     method: 'POST',
-    body: JSON.stringify({ text }),
+    // a clicked style card also sends its id, so the server does not have to interpret the text
+    body: JSON.stringify(styleId ? { text, style_id: styleId } : { text }),
   })
   if (!r.body) throw new ApiError('The server sent an empty reply.', r.status)
   yield* readEvents(r.body)

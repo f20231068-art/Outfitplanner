@@ -84,8 +84,9 @@ def events(response) -> list[tuple[str, dict]]:
     return out
 
 
-def say(env, auth, cid, text):
-    return events(env.client.post(f"/conversations/{cid}/messages", json={"text": text}, headers=auth))
+def say(env, auth, cid, text, style_id=None):
+    body = {"text": text, **({"style_id": style_id} if style_id else {})}
+    return events(env.client.post(f"/conversations/{cid}/messages", json=body, headers=auth))
 
 
 def new_conversation(env, auth) -> str:
@@ -248,24 +249,27 @@ def test_a_full_conversation_streams_progress_asks_questions_and_delivers_outfit
     cid = new_conversation(env, auth)
 
     first = say(env, auth, cid, "under 4000")  # no occasion yet: the agent asks
-    assert [e for e, _ in first] == ["status", "interrupt", "done"]
-    assert first[1][1]["type"] == "ask" and "occasion" in first[1][1]["question"]
+    assert [e for e, _ in first] == ["status", "message", "pending", "done"]
+    ask = next(d for e, d in first if e == "pending")
+    assert ask["type"] == "ask" and "occasion" in ask["question"]
 
     second = say(env, auth, cid, "college")  # answers the question: styles to choose from
     types = [e for e, _ in second]
-    assert "interrupt" in types and types[-1] == "done"
-    styles = next(d for e, d in second if e == "interrupt")
+    assert types[-1] == "done" and types[-2] == "pending"
+    styles = next(d for e, d in second if e == "pending")
     assert styles["type"] == "choose_style" and len(styles["styles"]) == 5
 
-    third = say(env, auth, cid, styles["styles"][2]["id"])  # picks a style
+    chosen = styles["styles"][2]
+    third = say(env, auth, cid, chosen["name"], style_id=chosen["id"])  # clicks a style card
     kinds = [e for e, _ in third]
-    assert kinds.count("status") >= 4 and kinds[-3:] == ["outfits", "message", "done"]
+    assert kinds.count("status") >= 4 and kinds[-4:] == ["outfits", "message", "pending", "done"]
+    assert third[-2][1] is None  # nothing is pending: the shopper can simply type what to change
     outfits = next(d for e, d in third if e == "outfits")["outfits"]
     assert len(outfits) == 4 and all(o["total_inr"] <= 4000 for o in outfits)
     assert all(o["top"]["image_url"] and o["bottom"]["title"] for o in outfits)
 
     history = env.client.get(f"/conversations/{cid}", headers=auth).json()
-    assert history["pending"] is None and len(history["outfits"]) == 4
+    assert history["pending"] is None and history["phase"] == "outfits_shown" and len(history["outfits"]) == 4
     assert history["messages"][0] == {"role": "user", "text": "under 4000"}
     assert history["title"] == "under 4000"
 
@@ -274,7 +278,7 @@ def test_outfits_are_saved_with_the_evidence_for_each_item(env):
     auth = signup(env)
     cid = new_conversation(env, auth)
     say(env, auth, cid, "college under 4000")
-    say(env, auth, cid, "s0")
+    say(env, auth, cid, "Style 0", style_id="s0")
     with env.pool.connection() as conn:
         assert conn.execute("SELECT count(*) AS n FROM outfits").fetchone()["n"] == 4
         row = conn.execute("SELECT verification FROM outfit_items LIMIT 1").fetchone()
@@ -361,20 +365,23 @@ def test_a_rate_limited_model_gives_a_friendly_busy_message(env):
     assert "busy" in err["message"]
 
 
-def test_a_new_request_after_finishing_starts_a_fresh_round(env):
+def test_the_conversation_continues_after_outfits_and_new_sets_are_added(env):
     auth = signup(env)
     cid = new_conversation(env, auth)
     say(env, auth, cid, "college under 4000")
-    say(env, auth, cid, "s0")
-    again = say(env, auth, cid, "college under 4000")  # a finished conversation: begin another round
-    assert any(e == "interrupt" for e, _ in again)
+    say(env, auth, cid, "Style 0", style_id="s0")
+    again = say(env, auth, cid, "can you make it cheaper")  # typed, not clicked: routed from the saved state
+    assert [e for e, _ in again][-4:] == ["outfits", "message", "pending", "done"]
+    assert any(d.get("stage") == "refine" for e, d in again if e == "status")
+    history = env.client.get(f"/conversations/{cid}", headers=auth).json()
+    assert len(history["outfits"]) == 8 and {o["batch"] for o in history["outfits"]} == {1, 2}
 
 
 # ===== buy links ===========================================================================================
 def _shown_product(env, auth) -> str:
     cid = new_conversation(env, auth)
     say(env, auth, cid, "college under 4000")
-    say(env, auth, cid, "s0")
+    say(env, auth, cid, "Style 0", style_id="s0")
     with env.pool.connection() as conn:
         return conn.execute("SELECT product_id FROM outfit_items WHERE product_id IS NOT NULL LIMIT 1").fetchone()["product_id"]
 
@@ -422,3 +429,40 @@ def test_a_dead_store_link_is_reported_not_hidden(env):
     pid = _shown_product(env, auth)
     env.tools.verdict = "dead"
     assert env.client.post(f"/products/{pid}/buy-link", headers=auth).json()["link_status"] == "dead"
+
+
+def test_a_conversation_saved_by_the_older_pausing_agent_simply_continues_on_the_new_one(env):
+    from typing import TypedDict
+
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.types import interrupt
+
+    class Old(TypedDict, total=False):
+        answer: str
+
+    def wait(state):
+        return {"answer": interrupt({"type": "choose_style"})}
+
+    old = StateGraph(Old)
+    old.add_node("wait_for_choice", wait)
+    old.add_edge(START, "wait_for_choice")
+    old.add_edge("wait_for_choice", END)
+    auth = signup(env)
+    cid = new_conversation(env, auth)
+    old.compile(checkpointer=env.saver).invoke({}, {"configurable": {"thread_id": cid}})  # paused, as before
+
+    reply = say(env, auth, cid, "college wear under 4000")  # the old pause is invisible to the new graph
+    assert [e for e, _ in reply][-2:] == ["pending", "done"] and "error" not in [e for e, _ in reply]
+    assert next(d for e, d in reply if e == "pending")["type"] == "choose_style"
+
+
+# ===== no usage limits by default ==========================================================================
+def test_there_are_no_usage_limits_unless_one_is_configured(env):
+    auth = signup(env)
+    for _ in range(25):  # far past the old 10-per-minute chat limit and 10 new conversations
+        cid = new_conversation(env, auth)
+        r = env.client.post(f"/conversations/{cid}/messages", json={"text": "hi"}, headers=auth)
+        assert r.status_code == 200
+    for i in range(40):  # and past the old 30-a-minute limit on sign-in calls from one address
+        r = env.client.post("/auth/login", json={"email": f"nobody{i}@example.com", "password": "a long wrong passphrase"})
+        assert r.status_code == 401  # refused for the password, never for being too fast

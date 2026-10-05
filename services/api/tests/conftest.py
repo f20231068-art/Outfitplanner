@@ -55,3 +55,9 @@ def pool(db_url):
     p = make_pool(db_url, min_size=1, max_size=8)
     yield p
     p.close()
+
+
+@pytest.fixture(autouse=True)
+def reader_off_unless_asked(monkeypatch):
+    """The model that reads candidate products is switched off for every test except those that pass their own."""
+    monkeypatch.setattr(settings, "ai_judge", False)

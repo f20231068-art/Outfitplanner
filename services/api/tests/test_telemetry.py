@@ -81,7 +81,7 @@ def test_each_step_reports_how_long_it_took_and_done_reports_the_totals(env):  #
     auth = signup(env)
     cid = new_conversation(env, auth)
     say(env, auth, cid, "college under 4000")
-    third = say(env, auth, cid, "s0")
+    third = say(env, auth, cid, "Style 0", style_id="s0")
     statuses = [d for e, d in third if e == "status"]
     assert statuses and all(isinstance(d["duration_ms"], int) and d["duration_ms"] >= 0 for d in statuses)
     elapsed = [d["elapsed_ms"] for d in statuses]
@@ -89,7 +89,7 @@ def test_each_step_reports_how_long_it_took_and_done_reports_the_totals(env):  #
 
     done = third[-1][1]
     assert done["outcome"] == "ok" and done["outfit_count"] == 4 and len(done["trace_id"]) == 32
-    assert done["stats"]["llm_calls"] == 1  # picking a style resumes at plan_outfits: one model call
+    assert done["stats"]["llm_calls"] == 1  # a clicked style card skips the router and goes straight to the planner: one model call
     assert done["stats"]["searches"] == 8  # four outfits, a top and a bottom each
     assert done["stats"]["search_errors"] == 0
 
@@ -217,13 +217,13 @@ def test_demo_mode_runs_a_whole_conversation_through_the_real_checkpointer(db_ur
         auth = {"Authorization": f"Bearer {token}"}
         cid = client.post("/conversations", headers=auth).json()["id"]
         first = events(client.post(f"/conversations/{cid}/messages", json={"text": "college wear, around 4000 rupees"}, headers=auth))
-        assert [d["type"] for e, d in first if e == "interrupt"] == ["choose_style"]
+        assert [d["type"] for e, d in first if e == "pending"] == ["choose_style"]
         final = events(client.post(f"/conversations/{cid}/messages", json={"text": STYLES[1][0]}, headers=auth))
         outfits = next(d["outfits"] for e, d in final if e == "outfits")
         assert len(outfits) == 4 and all(o["total_inr"] <= 4000 for o in outfits)
         # the conversation survives in Postgres: a brand-new request reads it back
         history = client.get(f"/conversations/{cid}", headers=auth).json()
-        assert history["pending"] is None and len(history["outfits"]) == 4
+        assert history["pending"] is None and history["phase"] == "outfits_shown" and len(history["outfits"]) == 4
         buy = client.post(f"/products/{outfits[0]['top']['product_id']}/buy-link", headers=auth)
         assert buy.status_code == 200 and buy.json()["store"] == "Demo Store"
 

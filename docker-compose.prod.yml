@@ -34,10 +34,11 @@ services:
       MCP_HOST: 0.0.0.0
       MCP_ALLOWED_HOSTS: mcp
       MCP_JWT_PUBLIC_KEY: ${MCP_JWT_PUBLIC_KEY:?run scripts/generate_jwt_keys.py --out .env.production}
-      SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
-      # a demo has a small search quota: these caps stop anyone using it up
-      MCP_DAILY_CREDITS_PER_USER: ${MCP_DAILY_CREDITS_PER_USER:-10}
-      MCP_DAILY_CREDITS_GLOBAL: ${MCP_DAILY_CREDITS_GLOBAL:-25}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      # 0 = no limit: the tool server serves for as long as the search provider does. Set a number to cap it.
+      MCP_DAILY_CREDITS_PER_USER: ${MCP_DAILY_CREDITS_PER_USER:-0}
+      MCP_DAILY_CREDITS_GLOBAL: ${MCP_DAILY_CREDITS_GLOBAL:-0}
+      MCP_RATE_LIMIT_PER_MIN: ${MCP_RATE_LIMIT_PER_MIN:-0}
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -61,7 +62,7 @@ services:
       MCP_JWT_PRIVATE_KEY: ${MCP_JWT_PRIVATE_KEY}
       AUTH_JWT_PRIVATE_KEY: ${AUTH_JWT_PRIVATE_KEY}
       AUTH_JWT_PUBLIC_KEY: ${AUTH_JWT_PUBLIC_KEY}
-      STYLIST_MODEL: ${STYLIST_MODEL:-openrouter/apodex/apodex-1.1-mini:free}
+      STYLIST_MODEL: ${STYLIST_MODEL:-openrouter/openai/gpt-6-luna}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       WEB_ORIGIN: ${PUBLIC_URL:-http://localhost:8080}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
@@ -69,8 +70,14 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-prod}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       BACKEND_MODE: ${BACKEND_MODE:-live}
+      DEMO_PLAN_DELAY_S: ${DEMO_PLAN_DELAY_S:-0}   # demo mode only: how long the scripted planner takes (to test long turns)
       # caddy (the only thing that can reach this container) tells the API each visitor's real address
       FORWARDED_ALLOW_IPS: "*"
+      # usage limits: 0 = none (the default). Set a number in .env.production to bring one back.
+      CHAT_MESSAGES_PER_MIN: ${CHAT_MESSAGES_PER_MIN:-0}
+      DAILY_CONVERSATIONS_PER_USER: ${DAILY_CONVERSATIONS_PER_USER:-0}
+      BUY_LINKS_PER_MIN: ${BUY_LINKS_PER_MIN:-0}
+      IP_AUTH_CALLS_PER_MIN: ${IP_AUTH_CALLS_PER_MIN:-0}
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]

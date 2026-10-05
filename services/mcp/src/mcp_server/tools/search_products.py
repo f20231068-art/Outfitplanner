@@ -1,76 +1,162 @@
-"""search_products: build a query, search, tidy the results. No MCP code in here, so it is easy to test.
+"""search_products: find candidate pages with ONE Tavily search, then read each page's own facts.
 
-Retrieval only. It does NOT decide whether a product really matches the request (colour, fit...):
-the agent's verifier does that. Here we only drop things that can never be useful.
+No MCP code in here, so it is easy to test.
+
+  1. DISCOVER: one search covers every store in the chosen groups (Tavily is restricted to those domains), so a search
+     costs one credit whether it covers 5 stores or 60. Cached for a few hours by (query, groups).
+  2. READ: for the best candidates, read the store's own page for its price, image and stock (providers/page_facts.py).
+     Free, exact, and cached per page. A page that cannot be read, or states no price, or is sold out, is not returned.
+
+Retrieval only. It does NOT decide whether a product really matches the request (colour, fit...): the agent's
+verifier does that. Here we only drop things that can never be useful.
 """
+
+import asyncio
+from collections.abc import Awaitable, Callable
 
 from mcp_server.cache import TTLCache
 from mcp_server.config import Settings
-from mcp_server.providers.serpapi import Parsed
-from mcp_server.schemas import SearchProductsResult, ToolWarning
+from mcp_server.providers.page_facts import PageFacts
+from mcp_server.providers.tavily import Candidate, good_product_name, product_id_for, tidy_title
+from mcp_server.schemas import ProductResult, SearchProductsResult, ToolWarning
+from mcp_server.sellers import GROUPS, domains_for
+
+PageReader = Callable[[str], Awaitable[PageFacts | None]]
 
 
-def build_query(item: str, color: str, fit: str | None = None, fabric: str | None = None) -> str:
-    """'men' is always included: this is a menswear app. Repeated words are dropped."""
+MAX_KEYWORDS_CHARS = 60
+
+
+def clean_keywords(raw: str | None) -> str:
+    """Extra search words from the caller: letters, digits, spaces and hyphens only, and short. The text goes into a
+    search query, so nothing else is let through."""
+    kept = "".join(ch if (ch.isalnum() or ch in " -") else " " for ch in (raw or ""))
+    return " ".join(kept.split())[:MAX_KEYWORDS_CHARS].strip()
+
+
+def build_query(
+    item: str, color: str | None = None, fit: str | None = None, fabric: str | None = None, keywords: str | None = None
+) -> str:
+    """'blue slim polo t-shirt for men'. Repeated words are dropped; 'men' is always there (menswear app).
+    `keywords` are extra words (a synonym, a style word) for a second try when the first search found too little."""
     words: list[str] = []
-    for part in ("men", color, fit or "", fabric or "", item):
+    for part in (color or "", fit or "", fabric or "", item, clean_keywords(keywords)):
         for w in part.lower().split():
             if w not in words:
                 words.append(w)
-    return " ".join(words)
+    text = " ".join(words)
+    return text if "men" in words or "mens" in words else f"{text} for men"
 
 
-def _retailer_allowed(name: str, allowed: tuple[str, ...]) -> bool:
-    return any(a in name.lower() for a in allowed)
+def product_from(candidate: Candidate, facts: PageFacts) -> ProductResult:
+    """A product whose every fact the store's own page stated. The title prefers the page's own product name."""
+    attributes = {k: v for k, v in (("color", facts.color), ("fabric", facts.material)) if v}
+    return ProductResult(
+        product_id=product_id_for(candidate.url),
+        title=facts.name if good_product_name(facts.name) else tidy_title(candidate.title),
+        retailer=candidate.retailer,
+        price_inr=facts.price_inr or 0,
+        url=candidate.url,
+        image_url=facts.image_url,
+        description=candidate.snippet[:300],
+        details=facts.details,
+        relevance=candidate.relevance,
+        in_stock=facts.in_stock,
+        attributes=attributes,
+    )
+
+
+async def _read_all(
+    candidates: list[Candidate], read: PageReader, facts_cache: TTLCache, failed_cache: TTLCache, concurrency: int
+) -> list[PageFacts | None]:
+    """Each candidate's facts. A page read once is remembered; so is a failure (for a shorter time), so a store that
+    blocks us is not hammered."""
+    gate = asyncio.Semaphore(concurrency)
+
+    async def one(c: Candidate) -> PageFacts | None:
+        cached = facts_cache.get(c.url)
+        if cached is not None:
+            return cached
+        if failed_cache.get(c.url):
+            return None
+        async with gate:
+            facts = await read(c.url)
+        if facts is None:
+            failed_cache.set(c.url, True)
+        else:
+            facts_cache.set(c.url, facts)
+        return facts
+
+    return list(await asyncio.gather(*[one(c) for c in candidates]))
 
 
 async def run_search(
     provider,
     cache: TTLCache,
-    detail_refs: TTLCache,
+    product_refs: TTLCache,
     cfg: Settings,
     *,
     item: str,
-    color: str,
+    color: str | None,
     max_price_inr: int,
     fit: str | None = None,
     fabric: str | None = None,
+    keywords: str | None = None,
+    store_groups: list[str] | None = None,
     limit: int = 20,
+    page_reader: PageReader,
+    facts_cache: TTLCache,
+    failed_cache: TTLCache,
 ) -> SearchProductsResult:
-    query = build_query(item, color, fit, fabric)
+    chosen = set(store_groups or GROUPS)
+    groups = [g for g in GROUPS if g in chosen]  # canonical order, so the cache key does not depend on input order
+    domains = [d for d in domains_for(groups) if d in cfg.allowed_domains]
+    query = build_query(item, color, fit, fabric, keywords)
 
-    cached = cache.get(query)
-    from_cache = cached is not None
-    if cached is None:
-        parsed, no_price = await provider.search(query)  # the only line that spends a credit
-        cached = (parsed, no_price)
-        cache.set(query, cached)
-        for p in parsed:  # remember how to resolve each product's real store link later
-            if p.detail_ref:
-                detail_refs.set(p.product.product_id, p.detail_ref)
-    parsed, no_price = cached
+    key = f"{query}|{','.join(groups)}"
+    outcome = cache.get(key)
+    from_cache = outcome is not None
+    if outcome is None:
+        outcome = await provider.search(query, domains)  # the only line that spends a credit
+        if outcome.candidates:  # an empty answer is never remembered: it would turn one blank reply into hours of blank replies
+            cache.set(key, outcome)
 
-    warnings: list[ToolWarning] = []
-    if no_price:
-        warnings.append(ToolWarning(code="NO_PRICE", message="results without a usable price", count=no_price))
+    # Best candidates first (Tavily orders by relevance), a batch at a time, until there are enough usable products
+    candidates = outcome.candidates[: cfg.page_reads_per_search]
+    unreadable = no_price = sold_out = pages_read = 0
+    products: list[ProductResult] = []
+    for start in range(0, len(candidates), cfg.page_read_batch):
+        batch = candidates[start : start + cfg.page_read_batch]
+        for candidate, facts in zip(batch, await _read_all(batch, page_reader, facts_cache, failed_cache, cfg.page_read_batch), strict=True):
+            if facts is None:
+                unreadable += 1
+            elif not facts.price_inr:
+                no_price += 1
+            elif facts.in_stock is False:
+                sold_out += 1
+            else:
+                products.append(product_from(candidate, facts))
+        pages_read += len(batch)
+        if sum(p.price_inr <= max_price_inr for p in products) >= cfg.enough_products:
+            break
+    for p in products:  # remember each product so get_buy_link can return its page (no credit needed)
+        product_refs.set(p.product_id, p)
 
-    kept: list[Parsed] = []
-    wrong_store = over_cap = 0
-    for p in parsed:
-        if not _retailer_allowed(p.product.retailer, cfg.allowed_retailers):
-            wrong_store += 1
-        elif p.product.price_inr > max_price_inr:
-            over_cap += 1
-        else:
-            kept.append(p)
-    if wrong_store:
-        warnings.append(ToolWarning(code="RETAILER_NOT_ALLOWED", message="results from stores we don't show", count=wrong_store))
-    if over_cap:
-        warnings.append(ToolWarning(code="PRICE_OVER_CAP", message="results above max_price_inr", count=over_cap))
-
+    kept = [p for p in products if p.price_inr <= max_price_inr]
+    skipped = [
+        ("NOT_A_PRODUCT_PAGE", "results that were not a single product page, or not an approved store", outcome.skipped_not_product),
+        ("PAGE_UNREADABLE", "store pages that could not be read (blocked or down)", unreadable),
+        ("NO_PRICE", "store pages that state no price", no_price),
+        ("OUT_OF_STOCK", "store pages that say the item is sold out", sold_out),
+        ("PRICE_OVER_CAP", "results above max_price_inr", len(products) - len(kept)),
+    ]
     return SearchProductsResult(
-        results=[p.product for p in kept[:limit]],
+        results=kept[:limit],
         query_used=query,
+        store_groups=groups,
+        stores_searched=len(domains),
+        pages_read=pages_read,
+        credits_spent=0 if from_cache else outcome.credits,
         from_cache=from_cache,
-        warnings=warnings,
+        warnings=[ToolWarning(code=c, message=m, count=n) for c, m, n in skipped if n],
     )

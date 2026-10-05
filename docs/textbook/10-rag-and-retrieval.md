@@ -8,6 +8,8 @@
 
 ---
 
+> **Default answer to "Why did the retrieval fail?"** Decide which half broke: **retrieval** (the right information never reached the next stage) or **generation** (it did, and the answer was still wrong). For retrieval, walk the ladder: *query → source returned anything? → filters discarded it? → parsing distorted it? → verification/ranking rejected it? → stale cache or state? → access/limits blocked it? → did it reach the model/user (k, truncation)?* For RAG specifically check ingestion/parsing, chunking, embeddings, dense-only misses on exact tokens, query rewriting, ACL/metadata filters, index staleness, `k`/thresholds/reranking and ANN recall, and measure with recall@k/MRR on labelled questions. For this project's product search, the evidence is the tool result's `query_used` and `warnings`, the graph's `rejected` reasons and planner `notes`, and the cache/limit/error metrics. Full procedure, worked example and a 90-second answer: [Chapter 37, section 37.1](37-the-four-questions.md#371-why-did-the-retrieval-fail).
+
 ## 10.1 Why retrieval?
 
 A model's built-in knowledge is **frozen** (training cutoff), **generic** (not your company's documents), **uncheckable** (no citations), and **fallible** (hallucination). Retrieval addresses each: fetch *current, private, citable* information at question time and let the model reason over it.

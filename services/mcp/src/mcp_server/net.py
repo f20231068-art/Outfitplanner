@@ -10,7 +10,7 @@ from mcp_server.config import Settings, settings
 
 RETRYABLE = {429, 500, 502, 503, 504}
 
-# httpx logs full request URLs at INFO, and ours contain the search API key.
+# httpx logs request URLs at INFO. The search key now travels in a header, but keep this quiet anyway.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
@@ -26,6 +26,32 @@ def make_client(cfg: Settings = settings, transport: httpx.AsyncBaseTransport | 
     if transport is None and cfg.force_ipv4:
         transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0")
     return httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=8.0), transport=transport)
+
+
+async def post_json(
+    client: httpx.AsyncClient, url: str, body: dict, headers: dict | None = None, *, retries: int = 2,
+    base_delay: float = 0.5,
+) -> dict:
+    """POST JSON with the same retry rules as get_json (429/5xx and network errors are retried)."""
+    last = "unknown error"
+    for attempt in range(retries + 1):
+        try:
+            resp = await client.post(url, json=body, headers=headers)
+        except httpx.TransportError as exc:
+            last = f"{type(exc).__name__}"
+        else:
+            if resp.status_code == 200:
+                return resp.json()
+            last = f"HTTP {resp.status_code}"
+            if resp.status_code not in RETRYABLE:
+                raise UpstreamError(f"search provider rejected the request ({last})", retryable=False)
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after and retry_after.isdigit() and attempt < retries:
+                await asyncio.sleep(min(int(retry_after), 10))
+                continue
+        if attempt < retries:
+            await asyncio.sleep(base_delay * (2**attempt) + random.uniform(0, 0.25))
+    raise UpstreamError(f"search provider unavailable after {retries + 1} tries ({last})", retryable=True)
 
 
 async def get_json(

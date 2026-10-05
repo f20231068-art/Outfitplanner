@@ -6,10 +6,12 @@ Rules that keep it hallucination-free:
   never 'match'.
 - price and item are REQUIRED to be 'match'. fit, fabric and category may be 'unknown' but never
   'mismatch'.
-- Colour is looked up in the page's colour field, then the title/description. If neither states
-  a colour, it is trusted from the colour-specific search (`assumed`), the report gets
-  confidence 'low', and the product ranks below confirmed ones. A stated colour that
-  contradicts the request is always rejected.
+- Colour is checked ONLY when the shopper asked for it (spec.color_source == 'user'). The planner's own
+  colours are a hidden coordination hint: they steer the search but never reject a product. For a
+  shopper-requested colour: it is looked up in the page's colour field, then the title/description; if
+  neither states one, it is trusted from the colour-specific search (`assumed`), the report gets
+  confidence 'low' and the product ranks below confirmed ones. A stated colour that contradicts the
+  request is always rejected.
 """
 
 import re
@@ -169,6 +171,19 @@ def _check_color(p: Product, hay: list[str], spec: ItemSpec) -> AttributeCheck:
     )
 
 
+def _check_avoid(p: Product, spec: ItemSpec) -> AttributeCheck:
+    """A colour the shopper does not want, against the colour the PAGE states. (A title that merely mentions the colour,
+    such as 'white tee with black print', is left to the judge.)"""
+    stated = p.attributes.get("color") or p.color
+    unwanted = [_CANON.get(c, c) for c in spec.avoid_colors]
+    hits = [t for t in _tokens(stated) if t in unwanted] if stated else []
+    return AttributeCheck(
+        attribute="avoid", requested="not " + ", ".join(spec.avoid_colors), found=stated,
+        status="mismatch" if hits else "match" if stated else "unknown",
+        evidence="page colour field" if stated else "colour not stated", required=False,
+    )
+
+
 def _check_gender(p: Product) -> AttributeCheck:
     """The shopper is a man: reject women's and kids' items, accept men's and unisex."""
     stated = p.attributes.get("gender")
@@ -195,6 +210,12 @@ def _check_soft(attr: str, requested: str, p: Product, hay: list[str]) -> Attrib
     wanted = _tokens(requested)
     stated = p.attributes.get(attr)
     pool = _tokens(stated) if stated else hay
+    if attr == "fabric" and "denim" in wanted and "jean" in hay:
+        pool = pool + ["denim"]  # jeans are denim: a title that says "Jeans" confirms it
+    if attr == "fabric" and stated:
+        # a page's material field names the base fibre ("Cotton") while the title names the fabric ("Denim Baggy Jeans"):
+        # either one confirms the fabric the shopper asked for
+        pool = pool + hay
     source = "page field" if stated else "title/description"
     if all(t in pool for t in wanted):
         return AttributeCheck(
@@ -226,9 +247,12 @@ def verify_product(product: Product, spec: ItemSpec) -> MatchReport:
         _check_price(product, spec),
         _check_item(hay, spec),
         _check_category(product, hay, spec),
-        _check_color(product, hay, spec),
         _check_gender(product),
     ]
+    if spec.color and spec.color_source == "user":
+        checks.insert(3, _check_color(product, hay, spec))
+    if spec.avoid_colors:
+        checks.append(_check_avoid(product, spec))
     if spec.fit:
         checks.append(_check_soft("fit", spec.fit, product, hay))
     if spec.fabric:
@@ -239,7 +263,8 @@ def verify_product(product: Product, spec: ItemSpec) -> MatchReport:
         for c in checks
         # a contradiction always blocks; a required attribute with no evidence blocks unless it
         # is an assumed one (colour trusted from the search)
-        if c.status == "mismatch" or (c.required and c.status != "match" and not c.assumed)
+        if (c.status == "mismatch" and c.attribute not in spec.loose)
+        or (c.required and c.status != "match" and not c.assumed)
     ]
     matched = sum(c.status == "match" for c in checks)
     return MatchReport(

@@ -34,7 +34,7 @@ BACKEND_MODE=demo
 ```
 
 Remove them (and run `up -d` again) for the real model and real search. Real mode uses your model quota
-(the free model allows 50 requests a day, about 8 conversations) and SerpAPI credits.
+(the free model allows 50 requests a day, about 8 conversations) and Tavily credits.
 
 Handy commands (same `-f ... --env-file ...` prefix):
 
@@ -49,14 +49,14 @@ docker compose -f docker-compose.prod.yml --env-file .env.production down -v    
 
 Any small Linux machine with Docker (an Oracle Cloud "Always Free" VM, or a cheap VPS), 2 GB RAM or more.
 
-1. Rotate your OpenRouter and SerpAPI keys; use the NEW ones below.
+1. Use your OpenRouter and Tavily keys below (rotate them first if they ever appeared anywhere public).
 2. Point a name at the server. A free one works: `<server-ip-with-dashes>.sslip.io` (for 203.0.113.7 that
    is `203-0-113-7.sslip.io`), or your own domain's A record.
 3. Open ports 80 and 443 in the provider's firewall. Open nothing else.
 4. Copy the project to the server (`git clone` of the repo), then create the keys on the server so they never
    travel: `generate_jwt_keys.py --out .env.production`, then
    `python scripts/init_production_env.py --server <your-name>`.
-5. Put the NEW `OPENROUTER_API_KEY`, `SERPAPI_API_KEY` and your `ADMIN_EMAILS` in `.env.production` by hand.
+5. Put `OPENROUTER_API_KEY`, `TAVILY_API_KEY` and your `ADMIN_EMAILS` in `.env.production` by hand.
 6. `docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build`.
    Caddy fetches the https certificate by itself on first visit.
 
@@ -72,12 +72,29 @@ projects, so the door (Caddy) and the web app share one container: `apps/web/Doc
 * `api`, `mcp`, `Postgres`: as described in the main steps. Only `web` has a public address.
 * If a separate `caddy` service exists, delete it.
 
+## Long replies (important)
+
+One agent turn streams its answer for 1 to 2 minutes (a model call, then store searches). Two settings keep that alive and
+are pinned by tests (`services/api/tests/test_deploy_config.py`):
+
+* **Caddy `request_buffers`** (infra/caddy/Caddyfile). Measured on Caddy 2.11: without it, a long POST response is cut at
+  exactly 60 seconds and the shopper never gets the outfits (GET streams were never affected). With it, the stream runs
+  to the end. Railway's `web` service runs this same Caddyfile.
+* **A keep-alive every 10 seconds** from the API while the agent is working, so no proxy sees a silent connection.
+
+To test a long turn without spending model quota: `DEMO_PLAN_DELAY_S=70` with `BACKEND_MODE=demo` and `ENVIRONMENT=dev`
+makes the scripted planner take 70 seconds.
+
 ## Limits and honest notes
 
 * `.env.production` holds every secret in one file. It is git-ignored. On a server, keep it readable by you only
   (`chmod 600`).
-* The tool server's daily search caps default to a low 10 per user and 25 total, to protect a small
-  search quota. Raise them with `MCP_DAILY_CREDITS_PER_USER` / `MCP_DAILY_CREDITS_GLOBAL` in `.env.production`.
+* There are no usage limits by default (nothing is refused for being too fast or too frequent). The only ceilings
+  are your providers' own: the chat model's request limit and your search plan's quota. When a provider refuses,
+  everyone sees a friendly "try again later". To bring a limit back, set it in `.env.production`:
+  `CHAT_MESSAGES_PER_MIN`, `DAILY_CONVERSATIONS_PER_USER`, `BUY_LINKS_PER_MIN`, `IP_AUTH_CALLS_PER_MIN` (API) and
+  `MCP_RATE_LIMIT_PER_MIN`, `MCP_DAILY_CREDITS_PER_USER`, `MCP_DAILY_CREDITS_GLOBAL` (tool server); `0` means no limit.
+  The login lockout (5 wrong passwords) is not a usage limit and stays on.
 * No backups are configured. The database lives in a Docker volume on that one machine.
 * Jaeger/Prometheus/Grafana are not part of this layout (see docs/observability.md for the local stack).
 * In demo mode the Buy button opens an empty tab (the mock links go nowhere).

@@ -11,7 +11,7 @@ export default function StyleCards({
 }) {
   return (
     <section aria-label="Choose a style">
-      <p style={{ marginBottom: 8, color: 'var(--muted)' }}>Pick a style, or type your own below.</p>
+      <p className="styles-intro">Pick a style, or describe your own in the box below.</p>
       <div className="styles">
         {styles.map((s) => (
           <button key={s.id} className="style-card" onClick={() => onPick(s)} disabled={disabled}>

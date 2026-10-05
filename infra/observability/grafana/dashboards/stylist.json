@@ -229,7 +229,7 @@
    "id": 7,
    "type": "stat",
    "title": "Search credits spent (last 24 hours)",
-   "description": "Paid search calls. Compare with your SerpAPI plan.",
+   "description": "Paid search calls. Compare with your Tavily plan.",
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"

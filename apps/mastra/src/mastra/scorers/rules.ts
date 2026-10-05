@@ -44,11 +44,36 @@ export function allItemsVerified(r: SessionResult): Verdict {
   return { score: ok / all.length, reason: `${ok} of ${all.length} products carry a passing verification` }
 }
 
-/** Informational: how many outfits have colours confirmed by the store (not just assumed from the search). */
-export function confirmedColourShare(r: SessionResult): Verdict {
+/**
+ * The conversation never ends: every follow-up message must get a reply, and one that asks for new outfits must
+ * deliver them (within the new budget, and never a product the shopper has already seen).
+ */
+export function followUpsHandled(r: SessionResult): Verdict {
+  if (r.rounds.length === 0) return { score: 1, reason: 'no follow-up messages in this case' }
+  const seen = new Set(items(r.outfits).map((i) => i.product_id ?? i.url))
+  const problems: string[] = []
+  r.rounds.forEach((round, n) => {
+    const label = `follow-up ${n + 1} ("${round.said.slice(0, 40)}")`
+    if (round.error) return problems.push(`${label}: error: ${round.error}`)
+    if (!round.reply) return problems.push(`${label}: no reply`)
+    if (round.expect?.outfits === true && round.outfits.length === 0) return problems.push(`${label}: expected new outfits, got none`)
+    if (round.expect?.outfits === false && round.outfits.length > 0) problems.push(`${label}: unexpectedly searched again`)
+    const over = round.expect?.budget === undefined ? [] : round.outfits.filter((o) => o.total_inr > round.expect!.budget!)
+    if (over.length) problems.push(`${label}: ${over.length} outfit(s) over the new budget of ₹${round.expect!.budget}`)
+    const repeats = items(round.outfits).filter((i) => seen.has(i.product_id ?? i.url))
+    if (repeats.length) problems.push(`${label}: ${repeats.length} product(s) already shown earlier`)
+    items(round.outfits).forEach((i) => seen.add(i.product_id ?? i.url))
+  })
+  return { score: clamp(1 - problems.length / r.rounds.length), reason: problems.join('; ') || `all ${r.rounds.length} follow-up(s) answered correctly` }
+}
+
+const COLOUR_WORDS = /\b(red|blue|green|black|white|beige|peach|pink|yellow|grey|gray|brown|olive|navy|maroon|purple|orange|cream|khaki|tan|lavender|mint|mustard|teal|coral|charcoal)\b/i
+
+/** Informational: the planner's colours are internal, so its explanations should talk about garments, not colours. */
+export function rationaleHidesColours(r: SessionResult): Verdict {
   if (r.outfits.length === 0) return { score: 0, reason: 'no outfits' }
-  const high = r.outfits.filter((o) => o.confidence === 'high').length
-  return { score: high / r.outfits.length, reason: `${high} of ${r.outfits.length} outfits have a store-confirmed colour (${pct(high / r.outfits.length)})` }
+  const leaking = r.outfits.filter((o) => COLOUR_WORDS.test(o.rationale))
+  return { score: 1 - leaking.length / r.outfits.length, reason: leaking.length ? `${leaking.length} explanation(s) mention a colour, e.g. "${leaking[0].rationale.slice(0, 60)}"` : 'no explanation mentions a colour' }
 }
 
 const NOT_MENS = /\b(women|womens|woman|ladies|lady|girl|girls|kid|kids|boy|boys|baby|infant|junior)\b/i
@@ -74,6 +99,31 @@ export function noDuplicateProducts(r: SessionResult): Verdict {
 const GARMENTS = ['t-shirt', 'tshirt', 'tee', 'polo', 'henley', 'hoodie', 'sweatshirt', 'sweater', 'shirt', 'jacket', 'kurta',
   'jeans', 'chinos', 'chino', 'joggers', 'jogger', 'cargo', 'trousers', 'pants', 'shorts', 'track']
 export const garmentOf = (title: string): string => GARMENTS.find((g) => title.toLowerCase().includes(g)) ?? 'other'
+
+/**
+ * The shopper said what they wanted in a piece ("a white oversized t-shirt", "denim baggy jeans"): every product in that
+ * position, in every outfit, must name it. A guarantee about the pipeline, so it is checked on the products' own titles.
+ */
+export function shopperWishesHonoured(r: SessionResult, c: Partial<SessionCase>): Verdict {
+  const wishes = c.expect?.wishes
+  if (!wishes || (!wishes.top?.length && !wishes.bottom?.length)) return { score: 1, reason: 'no specific wishes in this case' }
+  if (r.outfits.length === 0) return { score: 0, reason: 'no outfits to check against the wishes' }
+  const names = (title: string, entry: string) => entry.split('|').some((alt) => title.toLowerCase().includes(alt.trim().toLowerCase()))
+  const misses: string[] = []
+  let checked = 0
+  r.outfits.forEach((o, n) => {
+    for (const [slot, wanted] of [['top', wishes.top], ['bottom', wishes.bottom]] as const) {
+      for (const entry of wanted ?? []) {
+        checked += 1
+        if (!names(o[slot].title, entry)) misses.push(`outfit ${n + 1} ${slot} "${o[slot].title.slice(0, 40)}" lacks "${entry}"`)
+      }
+    }
+  })
+  return {
+    score: clamp(1 - misses.length / checked),
+    reason: misses.length ? `${misses.length} of ${checked} wished-for details missing: ${misses.slice(0, 3).join('; ')}` : `all ${checked} wished-for details present`,
+  }
+}
 
 /** Outfits should differ in garment type, not just colour. */
 export function garmentVariety(r: SessionResult): Verdict {
@@ -118,10 +168,10 @@ export function noBackendErrors(r: SessionResult): Verdict {
   return { score: 1, reason: 'no errors' }
 }
 
-/** Cost guard: a normal session needs about 6 model calls and 8 searches. Far more means a loop or waste. */
+/** Cost guard: a normal session needs about 10 model calls (the reader adds a few) and 8 searches. Far more means a loop or waste. */
 export function callEfficiency(r: SessionResult): Verdict {
   const llm = r.stats.llm_calls
   const searches = r.stats.searches
-  const over = Math.max(0, llm - 8) + Math.max(0, searches - 16)
+  const over = Math.max(0, llm - 14) + Math.max(0, searches - 16)
   return { score: clamp(1 - over / 10), reason: `${llm} model calls, ${searches} searches` }
 }

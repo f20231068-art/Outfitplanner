@@ -1,5 +1,10 @@
 # MCP server: plan and step-by-step guide
 
+> **Update (2026-10-05):** product search now uses **Tavily** restricted to 100 approved menswear brands, not SerpAPI
+> and Google Shopping. The tool-server structure, auth, limits and the way tools are wrapped are all unchanged, but
+> the SerpAPI-specific parts below (`providers/serpapi.py`, Google product pages, `get_buy_link` costing a credit)
+> describe the earlier design. For how search works now, read [search.md](search.md).
+
 Written for someone building their first MCP server. Each step says what to learn, what to run,
 and how to know it worked. Steps 1-3 are built and tested; the rest are planned.
 

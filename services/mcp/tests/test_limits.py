@@ -9,13 +9,13 @@ from starlette.testclient import TestClient
 
 from mcp_server.config import Settings
 from mcp_server.limits import CreditLedger, LimitExceeded, RateLimiter
-from mcp_server.providers.serpapi import parse_shopping_results
 from mcp_server.server import assert_safe_bind, build_server, http_guard
+from tests.fakes import FakePages, FakeTavily
 from tests.keys import PUBLIC_PEM, mint
 
 
 def cfg(**kw) -> Settings:
-    return Settings(serpapi_api_key="x", mcp_jwt_public_key=PUBLIC_PEM, _env_file=None, **kw)
+    return Settings(tavily_api_key="x", mcp_jwt_public_key=PUBLIC_PEM, _env_file=None, **kw)
 
 
 # ---- the rate limiter ---------------------------------------------------------------------
@@ -85,18 +85,6 @@ def test_allowances_reset_at_midnight_utc():
 
 
 # ---- wired into the real tools ------------------------------------------------------------
-class CountingProvider:
-    def __init__(self, response):
-        self.response, self.calls = response, 0
-
-    async def search(self, query):
-        self.calls += 1
-        return parse_shopping_results(self.response)
-
-    async def offers(self, ref):
-        return []
-
-
 async def test_too_many_tool_calls_in_a_minute_are_refused():
     server = build_server(cfg(mcp_rate_limit_per_min=3), provider=object())
     async with Client(server) as c:
@@ -106,22 +94,22 @@ async def test_too_many_tool_calls_in_a_minute_are_refused():
             await c.call_tool("ping", {})
 
 
-async def test_paid_searches_stop_at_the_daily_allowance_but_cached_ones_are_free(chinos_response):
-    provider = CountingProvider(chinos_response)
-    server = build_server(cfg(mcp_daily_credits_per_user=2), provider=provider)
+async def test_paid_searches_stop_at_the_daily_allowance_but_cached_ones_are_free(tavily_response):
+    provider = FakeTavily(tavily_response)
+    server = build_server(cfg(mcp_daily_credits_per_user=2), provider=provider, page_reader=FakePages())
     args = {"max_price_inr": 99999}
     async with Client(server) as c:
-        await c.call_tool("search_products", {"item": "chinos", "color": "beige", **args})
-        await c.call_tool("search_products", {"item": "chinos", "color": "beige", **args})  # cached: free
-        await c.call_tool("search_products", {"item": "chinos", "color": "black", **args})
+        await c.call_tool("search_products", {"item": "polo", "color": "blue", **args})
+        await c.call_tool("search_products", {"item": "polo", "color": "blue", **args})  # cached: free
+        await c.call_tool("search_products", {"item": "polo", "color": "black", **args})
         with pytest.raises(Exception, match="allowance"):
-            await c.call_tool("search_products", {"item": "chinos", "color": "navy", **args})
+            await c.call_tool("search_products", {"item": "polo", "color": "navy", **args})
     assert provider.calls == 2  # only the two paid calls reached the provider
 
 
-async def test_the_refused_search_never_reaches_the_provider(chinos_response):
-    provider = CountingProvider(chinos_response)
-    server = build_server(cfg(mcp_daily_credits_global=1), provider=provider)
+async def test_the_refused_search_never_reaches_the_provider(tavily_response):
+    provider = FakeTavily(tavily_response)
+    server = build_server(cfg(mcp_daily_credits_global=1), provider=provider, page_reader=FakePages())
     async with Client(server) as c:
         await c.call_tool("search_products", {"item": "chinos", "color": "beige", "max_price_inr": 5000})
         with pytest.raises(Exception, match="whole service"):
@@ -164,3 +152,27 @@ def test_the_server_refuses_to_listen_beyond_this_machine_without_an_allowed_hos
         assert_safe_bind(cfg(mcp_host="0.0.0.0"))
     assert_safe_bind(cfg(mcp_host="0.0.0.0", mcp_allowed_hosts="mcp.internal"))  # fine with a name set
     assert_safe_bind(cfg())  # loopback is always fine
+
+
+def test_zero_means_no_limit():
+    """0 switches a limit off: the service then serves for as long as the provider does."""
+    limiter = RateLimiter(0)
+    for _ in range(1000):
+        limiter.check("user_1")
+    ledger = CreditLedger(0, 0)
+    for _ in range(1000):
+        ledger.spend("user_1")
+    assert ledger.used_today == 1000  # still counted (for the metrics), just never refused
+
+
+def test_each_cap_can_be_switched_off_on_its_own():
+    only_global = CreditLedger(0, 3)
+    for _ in range(3):
+        only_global.spend("user_1")
+    with pytest.raises(LimitExceeded):
+        only_global.spend("user_2")
+    only_user = CreditLedger(2, 0)
+    only_user.spend("user_1", 2)
+    with pytest.raises(LimitExceeded):
+        only_user.spend("user_1")
+    only_user.spend("user_2", 2)  # someone else is unaffected, and there is no global cap

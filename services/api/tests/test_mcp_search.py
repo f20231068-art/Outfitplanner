@@ -6,7 +6,6 @@ import pytest
 from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ToolError
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import Command
 
 from api.agent.graph import build_graph
 from api.agent.mcp_search import McpProductSearch, product_from_tool_result
@@ -17,10 +16,11 @@ from tests.test_agent import FakeLLM
 SPEC = ItemSpec(category="bottom", item="chinos", color="beige", fit="slim", max_price_inr=2000)
 
 TOOL_ITEM = {
-    "product_id": "p1", "title": "Men's Beige Slim Chinos", "retailer": "Myntra", "price_inr": 1200,
-    "mrp_inr": 2000, "url": "https://www.google.com/search?ibp=oshop&q=x", "url_kind": "google_product_page",
-    "image_url": "https://img/x.jpg", "rating": 4.2, "reviews": 31, "delivery": "Free delivery",
-    "extraction": "shopping_api",
+    "product_id": "p1", "title": "Men's Beige Slim Chinos", "retailer": "Snitch", "price_inr": 1200,
+    "mrp_inr": 2000, "url": "https://www.snitch.com/products/beige-slim-chinos", "url_kind": "retailer",
+    "image_url": "https://img/x.jpg", "description": "Slim fit beige chinos for men", "relevance": 0.87,
+    "rating": 4.2, "reviews": 31, "delivery": "Free delivery", "extraction": "store_page",
+    "in_stock": True, "attributes": {"color": "Beige", "fabric": "Cotton"},
 }
 
 
@@ -28,11 +28,11 @@ def fake_server(results=None, error: str | None = None, seen: list | None = None
     server = FastMCP("fake-tools")
 
     @server.tool
-    def search_products(item: str, color: str, max_price_inr: int, fit: str | None = None,
-                        fabric: str | None = None, limit: int = 20) -> dict:
+    def search_products(item: str, max_price_inr: int, color: str | None = None, fit: str | None = None,
+                        fabric: str | None = None, store_groups: list[str] | None = None, limit: int = 20) -> dict:
         if seen is not None:
             seen.append({"item": item, "color": color, "max_price_inr": max_price_inr, "fit": fit,
-                         "fabric": fabric, "limit": limit})
+                         "fabric": fabric, "store_groups": store_groups, "limit": limit})
         if error:
             raise ToolError(error)
         return {"results": results if results is not None else [TOOL_ITEM], "warnings": []}
@@ -47,16 +47,31 @@ def searcher(server, **kw) -> McpProductSearch:
 # ---- mapping --------------------------------------------------------------------------------
 def test_a_tool_result_becomes_a_product_with_everything_the_tool_gave():
     p = product_from_tool_result(TOOL_ITEM)
-    assert (p.product_id, p.retailer, p.price_inr, p.mrp_inr) == ("p1", "Myntra", 1200, 2000)
-    assert p.url_kind == "google_product_page" and p.rating == 4.2 and p.delivery == "Free delivery"
-    assert p.extraction == "shopping_api" and p.verification is None  # verification is the verifier's job
+    assert (p.product_id, p.retailer, p.price_inr, p.mrp_inr) == ("p1", "Snitch", 1200, 2000)
+    assert p.url_kind == "retailer" and p.rating == 4.2 and p.delivery == "Free delivery"
+    assert p.description == "Slim fit beige chinos for men" and p.relevance == 0.87
+    assert p.extraction == "store_page" and p.verification is None  # verification is the verifier's job
+    assert p.in_stock is True and p.attributes == {"color": "Beige", "fabric": "Cotton"}  # what the store's page stated
 
 
 def test_search_sends_the_spec_to_the_tool_and_returns_products():
     seen: list = []
     products = searcher(fake_server(seen=seen))(SPEC)
     assert [p.title for p in products] == ["Men's Beige Slim Chinos"]
-    assert seen == [{"item": "chinos", "color": "beige", "max_price_inr": 2000, "fit": "slim", "fabric": None, "limit": 20}]
+    assert seen == [{"item": "chinos", "color": "beige", "max_price_inr": 2000, "fit": "slim", "fabric": None,
+                     "store_groups": None, "limit": 20}]
+
+
+def test_the_chosen_store_groups_go_to_the_tool_so_one_search_covers_them_all():
+    seen: list = []
+    spec = SPEC.model_copy(update={"store_groups": ["streetwear", "denim"]})
+    searcher(fake_server(seen=seen))(spec)
+    assert seen[0]["store_groups"] == ["streetwear", "denim"]
+
+
+def test_a_product_with_no_image_is_still_a_product():
+    item = {**TOOL_ITEM, "image_url": ""}
+    assert product_from_tool_result(item).image_url == ""
 
 
 def test_optional_fields_are_left_out_when_the_spec_has_none():
@@ -98,7 +113,7 @@ def _run(search, llm=None, thread="t"):
     graph = build_graph(llm, search, MemorySaver())
     cfg = {"configurable": {"thread_id": thread}}
     graph.invoke({"messages": [("user", "college under 4000")]}, cfg)
-    return llm, graph.invoke(Command(resume="s0"), cfg)
+    return llm, graph.invoke({"messages": [("user", "Style 0")], "choice": "s0"}, cfg)
 
 
 def test_when_search_is_down_the_shopper_gets_a_clear_message_and_no_endless_replanning():

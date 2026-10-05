@@ -23,12 +23,19 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     opencode_api_key: str = ""
     opencode_base_url: str = "https://opencode.ai/zen/v1"
-    serpapi_api_key: str = ""
     # How structured output is requested. The OpenRouter free model rejects "json_schema" and
     # json_mode returned nulls in testing; tool-calling ("function_calling") works.
     structured_output_method: str = "function_calling"
     # Some networks stall ~40s trying IPv6 before falling back to IPv4.
     force_ipv4: bool = True
+    # One model call may not take longer than this; a stalled provider is cut off and retried once instead of hanging a turn.
+    llm_timeout_s: float = 60.0
+    llm_max_retries: int = 1
+    # AI-read search: a model reads the real candidate products and judges them against what the shopper asked for.
+    # It can only keep or drop products that are already real and verified; it never supplies a fact.
+    ai_judge: bool = True
+    judge_max_candidates: int = 8  # products shown to the judge per search
+    judge_search_retries: int = 2  # extra searches (with the judge's own keywords) when too few products fit
     # (opencode only) override the endpoint style if the guess from the model name is wrong: chat | responses
     llm_api_mode: str = ""
 
@@ -56,9 +63,12 @@ class Settings(BaseSettings):
     # --- abuse limits
     login_max_failures: int = 5  # per email+address per window
     login_window_s: int = 15 * 60
-    chat_messages_per_min: int = 10  # per user
-    daily_conversations_per_user: int = 30
-    buy_links_per_min: int = 10  # per user (each costs a search credit)
+    # Usage limits. 0 = no limit (the default): the API keeps answering for as long as the model and search
+    # providers do. Set a number to bring a limit back. Login lockout above is not a usage limit and stays on.
+    chat_messages_per_min: int = 0  # per user
+    daily_conversations_per_user: int = 0
+    buy_links_per_min: int = 0  # per user (each costs a search credit)
+    ip_auth_calls_per_min: int = 0  # sign-up / login / refresh calls from one address
     # comma-separated emails allowed to use /admin endpoints (e.g. verifying the audit log)
     admin_emails: str = ""
     environment: str = "dev"  # "prod" turns off the interactive API docs

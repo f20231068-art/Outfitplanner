@@ -130,7 +130,7 @@ def create_app(
     # ---- shared state: settings and the rate limiters --------------------------------------------
     app.state.cfg = cfg
     app.state.login_failures = FailureCounter(cfg.login_max_failures, cfg.login_window_s)
-    app.state.ip_limiter = SlidingWindow(30, 60)  # any one address: 30 auth calls a minute
+    app.state.ip_limiter = SlidingWindow(cfg.ip_auth_calls_per_min, 60)  # any one address (0 = no limit)
     app.state.chat_limiter = SlidingWindow(cfg.chat_messages_per_min, 60)
     app.state.buy_limiter = SlidingWindow(cfg.buy_links_per_min, 60)
     for name, limiter in (("ip", app.state.ip_limiter), ("chat", app.state.chat_limiter), ("buy_link", app.state.buy_limiter)):

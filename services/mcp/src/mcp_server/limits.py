@@ -1,4 +1,5 @@
-"""Limits that cap the damage when something else goes wrong.
+"""Optional limits that cap the damage when something else goes wrong. A value of 0 (the default) means
+NO limit: the service then answers every request for as long as the search provider does.
 
 They do not keep anyone out; they bound the worst case. A bug in the agent's retry loop, or a
 caller holding a valid token, can then waste at most a small, known amount of search credits.
@@ -29,6 +30,8 @@ class RateLimiter:
         self._calls: dict[str, deque[float]] = defaultdict(deque)
 
     def check(self, subject: str) -> None:
+        if self.per_minute <= 0:  # 0 = no limit
+            return
         now = self._clock()
         calls = self._calls[subject]
         while calls and calls[0] <= now - 60:
@@ -61,12 +64,12 @@ class CreditLedger:
 
     def spend(self, subject: str, credits: int = 1) -> None:
         self._roll_over()
-        if self._total + credits > self.global_cap:
+        if self.global_cap > 0 and self._total + credits > self.global_cap:
             raise LimitExceeded(
                 "The daily search budget for the whole service is used up. It resets at 00:00 UTC.",
                 self._seconds_to_reset(),
             )
-        if self._users[subject] + credits > self.per_user:
+        if self.per_user > 0 and self._users[subject] + credits > self.per_user:
             raise LimitExceeded(
                 "You have used today's search allowance. It resets at 00:00 UTC.", self._seconds_to_reset()
             )

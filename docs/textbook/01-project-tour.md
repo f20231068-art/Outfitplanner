@@ -60,6 +60,8 @@ The product is **menswear only** by decision (recorded early in the project): th
 | **External: model** | OpenRouter | HTTP API | The language model (a free model during development) |
 | **External: search** | SerpAPI | HTTP API | Google Shopping results |
 
+> **Next chapter: [1b. How the servers are built and connected](01b-how-the-servers-connect.md)** goes through each server, every connection between them (protocol, address, credential, variable), why each env file (`.env.example`, `.env`, `.env.production`) lives where it does, which server receives which variable, and the order to build and verify the whole system.
+
 ### Why split it this way?
 
 Each split exists for a reason you will meet again in every serious system:

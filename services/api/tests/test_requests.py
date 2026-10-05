@@ -4,7 +4,6 @@ must not hand the model a stock list of trend names to copy."""
 import json
 
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import Command
 
 from api.agent.graph import build_graph
 from api.agent.products import mock_search
@@ -52,11 +51,11 @@ def test_requests_are_extracted_kept_and_passed_to_both_prompts():
     config = {"configurable": {"thread_id": "r1"}}
 
     first = graph.invoke({"messages": [("user", "a college reunion, preferably suits, under 4000")]}, config)
-    assert first["__interrupt__"][0].value["type"] == "choose_style"
+    assert first["phase"] == "choosing_style"
     assert graph.get_state(config).values["prefs"]["requests"] == "suits"
     assert "suits" in llm.seen["styles"] and "college reunion" in llm.seen["styles"]
 
-    graph.invoke(Command(resume="s1"), config)
+    graph.invoke({"messages": [("user", "S1")], "choice": "s1"}, config)
     assert json.loads(llm.seen["plan"])["preferences"]["requests"] == "suits"
 
 
@@ -82,4 +81,4 @@ def test_style_prompt_does_not_hand_the_model_stock_trend_names():
 
 def test_other_prompts_know_about_requests():
     assert "requests" in load_prompt("extract_prefs", 2)
-    assert "requests" in load_prompt("plan_outfits", 3)
+    assert "requests" in load_prompt("plan_outfits", 4)

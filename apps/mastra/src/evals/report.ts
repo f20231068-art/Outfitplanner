@@ -15,8 +15,10 @@ export const COLUMNS: Array<{ key: string; label: string; rule: Rule; gate: bool
   { key: 'price', label: 'prices', rule: rules.priceIntegrity, gate: true },
   { key: 'asks', label: 'asks right', rule: rules.askedOnlyWhatIsMissing, gate: true },
   { key: 'errors', label: 'no errors', rule: rules.noBackendErrors, gate: true },
-  { key: 'variety', label: 'variety', rule: rules.garmentVariety, gate: false },
-  { key: 'colour', label: 'colour ok', rule: rules.confirmedColourShare, gate: false },
+  { key: 'variety', label: 'variety', rule: rules.garmentVariety, gate: true },
+  { key: 'wishes', label: 'wishes', rule: rules.shopperWishesHonoured, gate: true },
+  { key: 'follow', label: 'follow-ups', rule: rules.followUpsHandled, gate: true },
+  { key: 'hidden', label: 'colour hidden', rule: rules.rationaleHidesColours, gate: false },
   { key: 'latency', label: 'speed', rule: (r, c) => rules.latency(r, c), gate: false },
   { key: 'calls', label: 'calls', rule: rules.callEfficiency, gate: false },
 ]

@@ -14,7 +14,34 @@ export interface SessionCase {
   /** Which style to pick: a position (0-based) or a name/id. Default: the first. */
   style?: number | string
   /** Ground truth for scorers: what SHOULD happen. */
-  expect?: { budget?: number; asks?: Array<'budget' | 'occasion'>; outfits?: number }
+  expect?: { budget?: number; asks?: Array<'budget' | 'occasion'>; outfits?: number; wishes?: Wishes }
+  /** Messages the shopper types AFTER the first outfits arrive ("cheaper", "more like outfit 2", a question). */
+  followUps?: FollowUp[]
+}
+
+/**
+ * What the shopper asked for in each piece. Every entry must appear in the product title; an entry may list alternatives
+ * with "|" ("white|off white|ivory", "t-shirt|tee|tshirt") because stores name the same thing in different ways.
+ */
+export interface Wishes {
+  top?: string[]
+  bottom?: string[]
+}
+
+export interface FollowUp {
+  say: string
+  /** outfits: should this message produce a new set? budget: the most each new outfit may cost. */
+  expect?: { outfits?: boolean; budget?: number }
+}
+
+/** What one follow-up message produced. */
+export interface Round {
+  said: string
+  reply: string | null
+  outfits: Outfit[]
+  error: string | null
+  outcome: string
+  expect?: FollowUp['expect']
 }
 
 export interface Item {
@@ -51,6 +78,8 @@ export interface SessionResult {
   assistantMessage: string | null
   /** Fields the agent asked about, in order, e.g. ['budget']. */
   asked: string[]
+  /** One entry per follow-up message, in order (empty when the case has none). */
+  rounds: Round[]
   styleNames: string[]
   turns: number
   totalMs: number
@@ -80,21 +109,24 @@ export async function runSession(api: StylistApi, c: SessionCase, hooks: Session
   const started = performance.now()
   const result: SessionResult = {
     caseId: c.id, conversationId: null, outcome: 'incomplete', outfits: [], assistantMessage: null,
-    asked: [], styleNames: [], turns: 0, totalMs: 0, stages: [],
+    asked: [], rounds: [], styleNames: [], turns: 0, totalMs: 0, stages: [],
     stats: { llm_calls: 0, searches: 0, search_errors: 0 }, traceIds: [], error: null,
   }
   try {
     result.conversationId = await api.createConversation()
     let text: string | null = c.prompt
+    let styleId: string | undefined
 
     for (let turn = 1; turn <= MAX_TURNS && text !== null; turn++) {
       result.turns = turn
       const reply = await api.sendMessage(result.conversationId, text, {
         traceparent: hooks.traceparent?.(),
         onEvent: (e) => hooks.onEvent?.(turn, e),
+        styleId,
       })
       if (reply.traceId) result.traceIds.push(reply.traceId)
       text = null
+      styleId = undefined
 
       for (const { event, data } of reply.events) {
         if (event === 'status') {
@@ -105,24 +137,49 @@ export async function runSession(api: StylistApi, c: SessionCase, hooks: Session
           result.assistantMessage = data.text
         } else if (event === 'error') {
           result.error = data.message
-        } else if (event === 'interrupt' && data.type === 'ask') {
+        } else if (event === 'pending' && data?.type === 'ask') {
           const field = fieldAsked(data.question)
           if (field) result.asked.push(field)
           const answer = field ? c.answers?.[field] : undefined
           text = answer ?? null // no scripted answer: the conversation stops here, which is itself a result
-        } else if (event === 'interrupt' && data.type === 'choose_style') {
+        } else if (event === 'pending' && data?.type === 'choose_style') {
           result.styleNames = data.styles.map((s: { name: string }) => s.name)
           const pick = c.style ?? 0
           const chosen = typeof pick === 'number'
             ? data.styles[pick]
             : data.styles.find((s: { id: string; name: string }) => [s.id, s.name.toLowerCase()].includes(String(pick).toLowerCase()))
-          text = (chosen ?? data.styles[0]).id
+          const card = chosen ?? data.styles[0]
+          text = card.name // what the shopper "clicked", sent together with the card's id
+          styleId = card.id
         } else if (event === 'done') {
           result.outcome = data.outcome === 'error' ? 'error' : data.outcome === 'no_outfits' ? 'no_outfits' : data.outcome === 'ok' ? 'ok' : 'incomplete'
           for (const k of ['llm_calls', 'searches', 'search_errors'] as const) result.stats[k] += data.stats?.[k] ?? 0
         }
       }
       if (result.error) break
+    }
+
+    // The conversation does not end: keep talking after the outfits arrive.
+    for (const f of c.followUps ?? []) {
+      if (result.error || !result.outfits.length) break
+      const round: Round = { said: f.say, reply: null, outfits: [], error: null, outcome: 'incomplete', expect: f.expect }
+      const reply = await api.sendMessage(result.conversationId, f.say, {
+        traceparent: hooks.traceparent?.(),
+        onEvent: (e) => hooks.onEvent?.(result.turns + 1, e),
+      })
+      result.turns += 1
+      if (reply.traceId) result.traceIds.push(reply.traceId)
+      for (const { event, data } of reply.events) {
+        if (event === 'status') result.stages.push({ turn: result.turns, stage: data.stage, label: data.label, durationMs: data.duration_ms ?? 0 })
+        else if (event === 'outfits') round.outfits = data.outfits
+        else if (event === 'message') round.reply = data.text
+        else if (event === 'error') round.error = data.message
+        else if (event === 'done') {
+          round.outcome = String(data.outcome)
+          for (const k of ['llm_calls', 'searches', 'search_errors'] as const) result.stats[k] += data.stats?.[k] ?? 0
+        }
+      }
+      result.rounds.push(round)
     }
   } catch (err) {
     result.outcome = 'error'

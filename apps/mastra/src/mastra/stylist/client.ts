@@ -73,12 +73,12 @@ export class StylistApi {
   async sendMessage(
     conversationId: string,
     text: string,
-    opts: { traceparent?: string; onEvent?: (e: ApiEvent) => void } = {},
+    opts: { traceparent?: string; onEvent?: (e: ApiEvent) => void; styleId?: string } = {},
   ): Promise<TurnResponse> {
     const started = performance.now()
     const res = await this.call(`/conversations/${conversationId}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(opts.styleId ? { text, style_id: opts.styleId } : { text }), // a clicked style card also sends its id
       headers: opts.traceparent ? { traceparent: opts.traceparent } : undefined,
     })
     if (!res.body) throw new ApiError('empty response', res.status)

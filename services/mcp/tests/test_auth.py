@@ -14,7 +14,7 @@ from mcp_server.config import Settings
 from mcp_server.server import build_server, http_guard
 from tests.keys import ATTACKER_PRIVATE_PEM, PUBLIC_PEM, mint
 
-CFG = Settings(serpapi_api_key="x", mcp_jwt_public_key=PUBLIC_PEM, _env_file=None)
+CFG = Settings(tavily_api_key="x", mcp_jwt_public_key=PUBLIC_PEM, _env_file=None)
 
 
 def verifier(**kw) -> ServiceJWTVerifier:
@@ -184,7 +184,7 @@ def test_a_foreign_host_or_origin_is_refused_even_with_a_valid_token(client):
 @pytest.mark.parametrize("bad", ["", "not a key", "-----BEGIN PUBLIC KEY-----\nbm9wZQ==\n-----END PUBLIC KEY-----"])
 def test_server_refuses_to_start_without_a_usable_public_key(bad):
     with pytest.raises(RuntimeError, match="MCP_JWT_PUBLIC_KEY"):
-        build_server(Settings(serpapi_api_key="x", mcp_jwt_public_key=bad, _env_file=None), provider=object())
+        build_server(Settings(tavily_api_key="x", mcp_jwt_public_key=bad, _env_file=None), provider=object())
 
 
 def test_a_key_stored_on_one_line_with_literal_backslash_n_still_loads():

@@ -7,7 +7,8 @@ from api.agent.verify import verify_product
 
 
 def _spec(**kw) -> ItemSpec:
-    base = {"category": "bottom", "item": "baggy pants", "color": "peach", "max_price_inr": 2000}
+    # these tests are about a colour the SHOPPER asked for (the only kind that is checked)
+    base = {"category": "bottom", "item": "baggy pants", "color": "peach", "color_source": "user", "max_price_inr": 2000}
     return ItemSpec(**{**base, **kw})
 
 
@@ -136,9 +137,9 @@ def test_find_products_never_returns_the_wrong_colour_decoy():
     out = find_products_for_specs(FindProductsInput(specs=[spec], budget_inr=3500), mock_search)
     assert len(out.outfits) == 1
     chosen = [out.outfits[0].top, out.outfits[0].bottom]
-    assert all(p.retailer != "Ajio" for p in chosen)  # decoy was the priciest, yet rejected
+    assert all(p.retailer != "Bewakoof" for p in chosen)  # decoy was the priciest, yet rejected
     assert all(p.verification and p.verification.is_match for p in chosen)
-    assert {r.retailer for r in out.rejected} == {"Ajio"}
+    assert {r.retailer for r in out.rejected} == {"Bewakoof"}
     assert any("color" in reason for r in out.rejected for reason in r.reasons)
 
 
@@ -154,12 +155,18 @@ def test_hallucinated_search_result_is_rejected_not_shown():
     assert out.rejected
 
 
-@pytest.mark.parametrize("budget", [1000, 2500])
+@pytest.mark.parametrize("budget", [1000, 2300])
 def test_verified_items_that_break_total_budget_are_unfilled(budget):
     spec = OutfitSpec(top=_spec(category="top", item="t-shirt"), bottom=_spec(), rationale="r")
     out = find_products_for_specs(FindProductsInput(specs=[spec], budget_inr=budget), mock_search)
     assert out.outfits == []
     assert "budget" in out.unfilled[0].reason
+
+
+def test_a_cheaper_pair_is_used_when_the_two_best_pieces_break_the_budget():
+    spec = OutfitSpec(top=_spec(category="top", item="t-shirt"), bottom=_spec(), rationale="r")
+    out = find_products_for_specs(FindProductsInput(specs=[spec], budget_inr=2500), mock_search)
+    assert len(out.outfits) == 1 and out.outfits[0].total_inr <= 2500  # 1200 + 1200, not the dearest 1900 + 1900
 
 
 def test_womens_and_kids_items_are_rejected_for_a_male_shopper():
@@ -258,3 +265,33 @@ def test_a_different_neckline_than_requested_is_rejected():
     assert crew.is_match and next(c for c in crew.checks if c.attribute == "item").status == "match"
     neutral = verify_product(_product(title="Men Black Solid T-Shirt", attributes={"color": "black"}), spec)
     assert neutral.is_match  # no neckline stated: allowed, flagged as low confidence
+
+
+# ---- colour the PLANNER chose is a hidden hint: it steers the search but never rejects a product ----
+def test_the_planners_own_colour_is_never_checked():
+    hint = _spec(color_source="planner")
+    for title, attrs in (("Black Baggy Pants", {"color": "Black"}), ("Olive Baggy Pants", {}), ("Baggy Pants", {})):
+        report = verify_product(_product(title=title, attributes=attrs), hint)
+        assert report.is_match and report.confidence == "high"
+        assert all(c.attribute != "color" for c in report.checks)  # no colour verdict at all
+
+
+def test_no_colour_at_all_is_fine():
+    report = verify_product(_product(title="Baggy Pants"), _spec(color=None, color_source="planner"))
+    assert report.is_match and all(c.attribute != "color" for c in report.checks)
+
+
+def test_a_colour_the_shopper_asked_for_is_still_enforced():
+    spec = _spec(color="purple")
+    assert not verify_product(_product(title="Black Baggy Pants", attributes={"color": "black"}), spec).is_match
+    assert verify_product(_product(title="Purple Baggy Pants", attributes={"color": "purple"}), spec).confidence == "high"
+
+
+def test_the_mock_search_decoy_is_a_womens_item_when_no_colour_was_asked_for():
+    spec = ItemSpec(category="top", item="t-shirt", color="olive", max_price_inr=1500)  # planner hint
+    out = find_products_for_specs(
+        FindProductsInput(specs=[OutfitSpec(top=spec, bottom=_spec(color_source="planner"), rationale="r")], budget_inr=3500),
+        mock_search,
+    )
+    assert len(out.outfits) == 1 and {r.retailer for r in out.rejected} == {"Bewakoof"}
+    assert any("gender" in reason for r in out.rejected for reason in r.reasons)

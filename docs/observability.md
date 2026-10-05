@@ -43,11 +43,11 @@ OTEL_TRACES_ENDPOINT=http://localhost:4318/v1/traces npm run eval -- --concurren
 npm run eval -- --only college-4000,missing-budget
 ```
 
-Each case plays a whole shopper session through the traced workflow `stylistSession`, then 12 scorers
+Each case plays a whole shopper session through the traced workflow `stylistSession`, then 13 scorers
 judge it. **Hard guarantees (gates, must be 1.0 for every case, exit code 1 otherwise):** four outfits,
 within budget, every item verified, menswear only, no duplicates, correct totals, asks only for what was
-missing, no errors. **Soft signals (reported, never fail the run):** garment variety, store-confirmed
-colour share, speed, number of model calls and searches.
+missing, no errors, different tops and bottoms across the outfits (variety), and follow-up messages handled
+(a reply to every one; change requests deliver new, in-budget, never-repeated outfits). **Soft signals (reported, never fail the run):** that no explanation spells out a colour, speed, number of model calls and searches.
 
 The same scorers are attached to the workflow step, so Mastra scores every run as it finishes and the
 scores appear in Studio and in the audit chain. Cases live in `apps/mastra/src/evals/cases.ts`.
@@ -55,7 +55,7 @@ scores appear in Studio and in the audit chain. Cases live in `apps/mastra/src/e
 **What demo mode does and does not prove.** It uses a scripted stand-in for the model and mock products,
 so a perfect score proves the plumbing (budget enforcement, verification, streaming, database,
 rate limits, tracing) and nothing about whether the REAL model makes good outfits. To evaluate the real
-model, run against `BACKEND_MODE=live`: a full run is ~6 model calls per case, so 13 cases need ~80 calls
+model, run against `BACKEND_MODE=live`: a full run is ~6 model calls per case (a few more with follow-ups), so 17 cases need ~110 calls
 (the free model allows 50 a day). Judging taste (does this outfit look good?) needs a model-based or human
 scorer; none is built yet.
 
