@@ -26,8 +26,8 @@ services:
       MCP_ALLOWED_HOSTS: mcp         # the only name other services may use to reach it
       MCP_JWT_PUBLIC_KEY: ${MCP_JWT_PUBLIC_KEY}
       TAVILY_API_KEY: ${TAVILY_API_KEY}
-      MCP_DAILY_CREDITS_PER_USER: ${MCP_DAILY_CREDITS_PER_USER:-40}
-      MCP_DAILY_CREDITS_GLOBAL: ${MCP_DAILY_CREDITS_GLOBAL:-100}
+      MCP_DAILY_CREDITS_PER_USER: ${MCP_DAILY_CREDITS_PER_USER:-0}
+      MCP_DAILY_CREDITS_GLOBAL: ${MCP_DAILY_CREDITS_GLOBAL:-0}
       METRICS_TOKEN: ${METRICS_TOKEN:-}   # empty = /metrics switched off
     read_only: true                  # the container cannot write to its own filesystem
     tmpfs: [/tmp]
