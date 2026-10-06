@@ -22,6 +22,7 @@ from mcp_server.config import Settings, settings
 from mcp_server.limits import CreditLedger, LimitExceeded, RateLimiter
 from mcp_server.metrics import CACHE, CREDITS, LIMIT_HITS, tracked
 from mcp_server.net import UpstreamError, make_client
+from mcp_server.providers.openrouter_search import OpenRouterSearch
 from mcp_server.providers.page_facts import read_page
 from mcp_server.providers.tavily import TavilySearch
 from mcp_server.schemas import BuyLinkResult, LinkCheckResult, SearchProductsResult
@@ -74,10 +75,10 @@ class LimitedProvider:
             raise
         CREDITS.labels(kind).inc(credits)
 
-    async def search(self, query: str, domains: list[str]):
+    async def search(self, query: str, domains: list[str], context: str | None = None):
         # an "advanced" Tavily search costs 2 credits; the provider knows its own price
         self._spend("search", getattr(self._inner, "credits_per_search", 1))
-        return await self._inner.search(query, domains)
+        return await self._inner.search(query, domains, context)
 
 
 def build_server(
@@ -89,7 +90,8 @@ def build_server(
     http_client = http_client or make_client(cfg)
     ledger = CreditLedger(cfg.mcp_daily_credits_per_user, cfg.mcp_daily_credits_global)
     limiter = RateLimiter(cfg.mcp_rate_limit_per_min)
-    provider = LimitedProvider(provider or TavilySearch(cfg, http_client), ledger)
+    default = OpenRouterSearch(cfg, http_client) if cfg.search_provider == "openrouter" else TavilySearch(cfg, http_client)
+    provider = LimitedProvider(provider or default, ledger)
     search_cache = TTLCache(cfg.search_cache_ttl_s)
     product_refs = TTLCache(cfg.search_cache_ttl_s, max_items=5000)  # product_id -> the product (for get_buy_link)
     facts_cache = TTLCache(cfg.search_cache_ttl_s, max_items=5000)  # page url -> what the page states
@@ -138,6 +140,14 @@ def build_server(
             str | None, Field(description="Colour to search for, e.g. 'olive green'. Optional: leave out to search every colour")
         ] = None,
         fabric: Annotated[str | None, Field(description="e.g. 'cotton', 'linen'")] = None,
+        style: Annotated[
+            str | None,
+            Field(
+                max_length=300,
+                description="Optional: the look the shopper chose, e.g. 'Olive polo and beige chinos: relaxed smart casual'. "
+                "The search model reads the pages for pieces that suit it",
+            ),
+        ] = None,
         keywords: Annotated[
             str | None,
             Field(
@@ -171,7 +181,7 @@ def build_server(
                 result = await run_search(
                     provider, search_cache, product_refs, cfg,
                     item=item, color=color, max_price_inr=max_price_inr,
-                    fit=fit, fabric=fabric, keywords=keywords, store_groups=store_groups, limit=limit,
+                    fit=fit, fabric=fabric, keywords=keywords, style=style, store_groups=store_groups, limit=limit,
                     page_reader=read, facts_cache=facts_cache, failed_cache=failed_cache,
                 )
             except UpstreamError as exc:

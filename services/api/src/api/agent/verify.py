@@ -6,7 +6,8 @@ Rules that keep it hallucination-free:
   never 'match'.
 - price and item are REQUIRED to be 'match'. fit, fabric and category may be 'unknown' but never
   'mismatch'.
-- Colour is checked ONLY when the shopper asked for it (spec.color_source == 'user'). The planner's own
+- Colour is checked ONLY when the shopper asked for it (spec.color_source 'user'), or the style card they picked
+  names it ('style'). The planner's own
   colours are a hidden coordination hint: they steer the search but never reject a product. For a
   shopper-requested colour: it is looked up in the page's colour field, then the title/description; if
   neither states one, it is trusted from the colour-specific search (`assumed`), the report gets
@@ -44,6 +45,31 @@ _COLORS = {
     "brown", "olive", "navy", "maroon", "purple", "orange", "cream", "khaki", "tan", "lavender",
     "mint", "mustard", "teal", "coral", "charcoal",
 }
+# Stores name the same colour in different words. A requested colour is also met by any of these (tokens as _tokens gives them).
+_COLOUR_SYNONYMS = {
+    "olive": {"army", "military", "moss"}, "grey": {"slate", "ash"}, "beige": {"sand", "stone", "oatmeal"},
+    "maroon": {"burgundy", "wine"}, "brown": {"chocolate", "coffee"}, "white": {"ivory"}, "black": {"jet"},
+    "navy": {"midnight"},
+}
+# What to add to a search for a colour when the plain word finds too little.
+_COLOUR_SEARCH_WORDS = {
+    "olive": "army green", "grey": "slate grey", "beige": "sand beige", "maroon": "burgundy", "brown": "chocolate brown",
+    "navy": "navy blue", "white": "off white",
+}
+
+
+_COLOR_WORDS = _COLORS  # public name for the colour words (the graph reads a style card's colours with it)
+
+
+def colour_search_words(colour: str | None) -> str | None:
+    """Another way stores write this colour, as extra search words ('olive' -> 'army green'), or None."""
+    return next((words for c, words in _COLOUR_SEARCH_WORDS.items() if colour and c in colour.lower().split()), None)
+
+
+def _colour_met(word: str, tokens: list[str]) -> bool:
+    return word in tokens or any(s in tokens for s in _COLOUR_SYNONYMS.get(word, ()))
+
+
 _MALE = {"men", "mens", "man", "male", "gents"}
 _FEMALE = {"women", "womens", "woman", "ladies", "female"}
 _KIDS = {"boys", "boy", "girls", "girl", "kids", "kid", "junior", "infant"}
@@ -84,9 +110,14 @@ def _necks(tokens: list[str]) -> set[str]:
     return found
 
 
+_PANTS_LIKE = {"pant", "jean", "chino", "jogger", "cargo", "legging", "palazzo", "trackpant", "parachute"}
+
+
 def _noun_present(noun: str, hay: list[str]) -> bool:
     if noun in hay:
         return True
+    if noun == "pant" and "short" not in hay and any(t in hay for t in _PANTS_LIKE):
+        return True  # "pants" asked for: jeans, chinos, joggers, cargos and track pants are all pants
     # Stores often call cargo trousers just "Cargos". That counts as pants, but never as shorts.
     return noun == "pant" and "cargo" in hay and "short" not in hay
 
@@ -94,7 +125,7 @@ def _noun_present(noun: str, hay: list[str]) -> bool:
 def _check_item(hay: list[str], spec: ItemSpec) -> AttributeCheck:
     wanted = _tokens(spec.item)
     wanted_neck, title_neck = _necks(wanted), _necks(hay)
-    missing = [t for t in wanted if t not in hay]
+    missing = [t for t in wanted if t not in hay and not (t == "pant" and _noun_present("pant", hay))]
     if wanted_neck & title_neck:  # "crewneck" is satisfied by a title saying "Crew Neck"
         missing = [t for t in missing if t not in _NECK_WORDS]
     if not missing:
@@ -122,8 +153,16 @@ def _check_item(hay: list[str], spec: ItemSpec) -> AttributeCheck:
     )
 
 
+_SET_TITLE = re.compile(r"co-?\s?ords?\b|\bcombo\b|\b(?:set|pair) of\b|\bsuit set\b", re.IGNORECASE)
+
+
 def _check_category(p: Product, hay: list[str], spec: ItemSpec) -> AttributeCheck:
     own, other = (_TOP_WORDS, _BOTTOM_WORDS) if spec.category == "top" else (_BOTTOM_WORDS, _TOP_WORDS)
+    if _SET_TITLE.search(p.title) and any(t in _TOP_WORDS for t in hay) and any(t in _BOTTOM_WORDS for t in hay):
+        return AttributeCheck(  # a top AND a bottom sold together is two garments, not the one asked for
+            attribute="category", requested=spec.category, found="a set of several garments", status="mismatch",
+            evidence="the title names a set (co-ord / combo)", required=False,
+        )
     stated = p.attributes.get("category")
     if stated:
         return AttributeCheck(
@@ -148,12 +187,20 @@ def _check_color(p: Product, hay: list[str], spec: ItemSpec) -> AttributeCheck:
     wanted = _tokens(spec.color)
     stated = p.attributes.get("color") or p.color
     if stated:
-        ok = all(t in _tokens(stated) for t in wanted)
+        ok = all(_colour_met(t, _tokens(stated)) for t in wanted)
+        named = [t for t in hay if t in _COLORS and t not in wanted]
+        if ok and named and not all(_colour_met(t, hay) for t in wanted):
+            # the page's colour field agrees, but the title the shopper reads names ONLY other colours ("Grey Baggy Parachute
+            # Pants" with a field saying Black): the store's own data contradicts itself, so it is not shown as a match
+            return AttributeCheck(
+                attribute="color", requested=spec.color, found=named[0], status="mismatch",
+                evidence="the title names a different colour than the page's colour field", required=True,
+            )
         return AttributeCheck(
             attribute="color", requested=spec.color, found=stated,
             status="match" if ok else "mismatch", evidence="page color field", required=True,
         )
-    if _contains_phrase(hay, wanted) or all(t in hay for t in wanted):
+    if _contains_phrase(hay, wanted) or all(_colour_met(t, hay) for t in wanted):
         return AttributeCheck(
             attribute="color", requested=spec.color, found=spec.color, status="match",
             evidence="color in title/description", required=True,
@@ -249,7 +296,7 @@ def verify_product(product: Product, spec: ItemSpec) -> MatchReport:
         _check_category(product, hay, spec),
         _check_gender(product),
     ]
-    if spec.color and spec.color_source == "user":
+    if spec.color and spec.color_source in ("user", "style"):
         checks.insert(3, _check_color(product, hay, spec))
     if spec.avoid_colors:
         checks.append(_check_avoid(product, spec))

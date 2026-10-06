@@ -43,6 +43,7 @@ class SearchProductsResult(BaseModel):
     stores_searched: int = Field(0, description="How many approved stores the one search covered")
     pages_read: int = Field(0, description="How many candidate store pages were read for their price, image and stock")
     credits_spent: int = Field(0, description="Search credits this call cost (0 when served from cache)")
+    search_cost_usd: float = Field(0.0, description="What the search cost in dollars, when the provider reports it (0 from cache)")
     from_cache: bool = Field(description="True if served from cache (no search credit spent)")
     warnings: list[ToolWarning] = Field(default_factory=list)
 

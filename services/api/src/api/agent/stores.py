@@ -90,6 +90,16 @@ def second_try_groups(item: str, tried: list[list[str]]) -> list[str]:
     return next((opt for opt in options if opt and sorted(opt) not in done), [])
 
 
+def wide_groups(item: str, planned: list[str]) -> list[str]:
+    """The groups to search for a garment the shopper FIXED: the planner's groups plus every everyday-clothing group and the
+    group that specialises in the garment. The searches over these stores run side by side, so looking everywhere costs no extra
+    time, and it saves the wait for a second search when the first one finds too few. Traditional garments (kurtas...) look
+    only at the traditional stores and smart casual."""
+    if "traditional" in specialist_groups(item):
+        return groups_for_item(item, ["smart_casual", "traditional"])
+    return groups_for_item(item, sorted(set(planned) | set(_GENERAL_GROUPS)))
+
+
 def resolve_groups(planned, style_text: str, requests: str | None = None) -> list[str]:
     """The planner's valid groups (capped), else a default from the style."""
     chosen = clean_groups(planned)[:MAX_GROUPS]

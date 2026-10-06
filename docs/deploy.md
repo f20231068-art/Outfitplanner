@@ -72,6 +72,12 @@ projects, so the door (Caddy) and the web app share one container: `apps/web/Doc
 * `api`, `mcp`, `Postgres`: as described in the main steps. Only `web` has a public address.
 * If a separate `caddy` service exists, delete it.
 
+## Search settings the tool server needs
+
+The product search is a model searching the web through OpenRouter, so the **mcp** service needs `OPENROUTER_API_KEY` (the
+same key the API uses). Optional: `SEARCH_PROVIDER` (`openrouter` default, or `tavily` with `TAVILY_API_KEY`), `SEARCH_MODEL`
+(default `openai/gpt-6-luna`). On Railway set these on the **mcp** service; on **api** set `STYLIST_MODEL`.
+
 ## Long replies (important)
 
 One agent turn streams its answer for 1 to 2 minutes (a model call, then store searches). Two settings keep that alive and

@@ -98,8 +98,10 @@ class ItemSpec(BaseModel):
         description="colour to search for. The planner picks it for coordination and it is never shown or "
         "checked; a colour the SHOPPER asked for (color_source='user') is searched, checked and shown",
     )
-    color_source: Literal["planner", "user", "anchor"] = Field(
-        "planner", description="who chose the colour: only 'user' is verified against the product"
+    color_source: Literal["planner", "user", "style", "anchor"] = Field(
+        "planner",
+        description="who chose the colour: 'user' (the shopper asked) and 'style' (the style card they picked names it) "
+        "are verified against the product; the planner's own colours are only a hint",
     )
     fit: str | None = None
     fabric: str | None = None
@@ -119,6 +121,7 @@ class ItemSpec(BaseModel):
     )
     avoid_colors: list[str] = Field(default_factory=list, description="colours the shopper does not want")
     keywords: str | None = Field(None, description="extra search words for a second try (set by the product reader)")
+    style: str | None = Field(None, description="the look the shopper chose, passed to the search so it reads for pieces that suit it")
 
 
 class OutfitSpec(BaseModel):

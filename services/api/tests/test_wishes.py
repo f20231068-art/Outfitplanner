@@ -174,7 +174,7 @@ def test_model_calls_have_a_time_limit_and_the_reader_is_on_by_default():
     cfg = Settings(stylist_model="openrouter/openai/gpt-6-luna", openrouter_api_key="k", _env_file=None)
     llm = get_llm(cfg)
     assert llm.request_timeout == 60.0 and llm.max_retries == 1
-    assert cfg.ai_judge is True and cfg.judge_search_retries == 2 and cfg.judge_max_candidates == 8
+    assert cfg.ai_judge is True and cfg.judge_search_retries == 1 and cfg.judge_max_candidates == 12
     assert Settings(_env_file=None).stylist_model  # the default is a real setting
     assert ItemSpec(category="top", item="x", max_price_inr=1).fixed == []
 
@@ -269,3 +269,54 @@ def test_pieces_typed_as_the_style_are_read_like_a_first_message():
     assert state["prefs"]["budget_inr"] == 4500  # what was already known is kept
     assert len(state["outfits"]) >= 3
     assert all("Grey" in o["top"]["title"] and "Oversized" in o["top"]["title"] for o in state["outfits"])  # not a polo, not an overshirt
+
+
+def test_stores_name_olive_in_other_words_and_the_rules_know_it():
+    from api.agent.verify import colour_search_words
+
+    spec = ItemSpec(category="top", item="t-shirt", color="olive", color_source="user", max_price_inr=2000)
+
+    def tee(colour):
+        return Product(title="Oversized T-Shirt", retailer="X", price_inr=900, url="https://x/1", image_url="https://i",
+                       attributes={"color": colour, "gender": "men"})
+
+    assert verify_product(tee("Army Green"), spec).is_match and verify_product(tee("Olive Green"), spec).is_match
+    assert not verify_product(tee("Sky Blue"), spec).is_match and not verify_product(tee("Trekking Green"), spec).is_match
+    assert colour_search_words("olive") == "army green" and colour_search_words("black") is None
+
+
+# ---- colours the style card names -------------------------------------------------------------------------------------
+def test_a_colour_the_chosen_style_names_becomes_a_verified_colour_but_the_planners_own_does_not():
+    from api.agent.graph import apply_style_colours
+
+    spec = OutfitSpec(top=_spec(0).top.model_copy(update={"color": "dark olive"}),
+                      bottom=_spec(0).bottom.model_copy(update={"color": "charcoal"}), rationale="r")
+    out = apply_style_colours([spec], "Olive polo & beige chinos: relaxed smart casual")[0]
+    assert (out.top.color, out.top.color_source) == ("olive", "style")  # 'dark' was the planner's; the card said olive
+    assert (out.bottom.color, out.bottom.color_source) == ("charcoal", "planner")  # not on the card: a hint only
+    shopper = OutfitSpec(top=_spec(0).top.model_copy(update={"color": "white", "color_source": "user"}), bottom=_spec(0).bottom, rationale="r")
+    assert apply_style_colours([shopper], "White shirt")[0].top.color_source == "user"  # the shopper's own stays theirs
+
+
+def test_a_style_colour_is_checked_on_the_product_like_a_colour_the_shopper_asked_for():
+    spec = _spec(0).top.model_copy(update={"item": "shirt0", "color": "olive", "color_source": "style"})
+
+    def tee(colour):
+        return Product(title="Shirt0 for men", retailer="X", price_inr=900, url="https://x/1", image_url="https://i",
+                       attributes={"color": colour, "gender": "men"})
+
+    assert verify_product(tee("Army Green"), spec).is_match and not verify_product(tee("Sky Blue"), spec).is_match
+
+
+def test_the_chosen_style_travels_with_every_piece_to_the_search_and_its_colours_are_verified():
+    seen = []
+
+    def search(spec):
+        seen.append((spec.category, spec.color, spec.color_source, spec.style))
+        return mock_search(spec)
+
+    graph = build_graph(ScriptedLLM(), search, MemorySaver())
+    config = {"configurable": {"thread_id": "style-colours"}}
+    say(graph, config, "college fest, budget 4500")
+    say(graph, config, "Streetwear", choice="streetwear")
+    assert seen and all(s[3] and s[3].startswith("Streetwear") for s in seen)  # the look is passed on every search

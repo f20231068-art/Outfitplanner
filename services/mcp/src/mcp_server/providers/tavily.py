@@ -93,6 +93,7 @@ class SearchOutcome:
     results_seen: int  # pages Tavily returned
     skipped_not_product: int  # not a single product page, or a store we do not list
     credits: int  # what this search cost
+    cost_usd: float = 0.0  # the real money cost, when the provider reports it
 
 
 def product_id_for(url: str) -> str:
@@ -155,7 +156,7 @@ class TavilySearch:
             body["country"] = self.cfg.tavily_country
         return body
 
-    async def search(self, query: str, domains: list[str]) -> SearchOutcome:
+    async def search(self, query: str, domains: list[str], context: str | None = None) -> SearchOutcome:
         if not domains:
             raise UpstreamError("no stores to search", retryable=False)
         key = self._require_key()

@@ -11,9 +11,9 @@ class FakeTavily:
         self.response, self.credits_per_search = response, credits
         self.calls, self.last_query, self.last_domains = 0, None, None
 
-    async def search(self, query: str, domains: list[str]):
+    async def search(self, query: str, domains: list[str], context: str | None = None):
         self.calls += 1
-        self.last_query, self.last_domains = query, domains
+        self.last_query, self.last_domains, self.last_context = query, domains, context
         return parse_results(self.response, credits=self.credits_per_search)
 
 

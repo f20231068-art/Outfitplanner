@@ -145,7 +145,7 @@ async def test_pages_are_read_in_parallel_up_to_the_limit(tavily_response):
 
 async def test_reading_stops_as_soon_as_there_are_enough_products(tavily_response):
     pages = FakePages()  # every page is fine
-    out = await run(FakeTavily(tavily_response), pages, cfg=Settings(enough_products=4, _env_file=None))  # batches of 5
+    out = await run(FakeTavily(tavily_response), pages, cfg=Settings(enough_products=4, page_read_batch=5, _env_file=None))  # batches of 5
     assert out.pages_read == 5 and len(pages.calls) == 5 and len(out.results) == 5  # one batch was plenty
     assert Settings(_env_file=None).enough_products == 8  # by default it reads on, so the agent has fits to choose from
 
@@ -255,7 +255,7 @@ async def test_invalid_arguments_are_rejected_by_the_schema_before_our_code_runs
 
 async def test_provider_outage_becomes_a_clean_tool_error():
     class Down:
-        async def search(self, query, domains):
+        async def search(self, query, domains, context=None):
             raise UpstreamError("search provider unavailable after 3 tries (HTTP 503)", retryable=True)
 
     server = build_server(CFG, provider=Down(), page_reader=FakePages())

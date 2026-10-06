@@ -1,4 +1,32 @@
-# Product search: Tavily finds the pages, the stores' own pages give the facts
+# Product search: a model searches the approved stores, the stores' own pages give the facts
+
+## Current design (2026-10-06): model web search, then verification
+
+The default search provider is **OpenRouter's web-search tool with `openai/gpt-6-luna`** (`SEARCH_PROVIDER=openrouter`; Tavily
+below is still selectable with `SEARCH_PROVIDER=tavily`). Why it replaced ranked results: Tavily returns pages ranked by
+meaning, so a specific colour is rare among 20 results ("olive oversized t-shirt" returned no olive tee at all). The model
+search reads the page excerpts it gets back, so one call returned eight olive oversized tees from approved stores.
+
+```
+shopper picks a style card ("Olive polo & beige chinos")
+  └─ planner designs the outfits; colours the CARD names become verified colours (colour_source "style")
+       └─ per distinct piece, the store groups are split into chunks of <= 35 stores and searched side by side
+            (tool server: search_products, `style` = the look; the model reads the excerpts for pieces that suit it)
+            └─ every address is checked: approved store, single product page; then each page is READ for price/image/stock
+                 └─ rules verify (price, garment, men's, colour...), a reader model judges, best pair within budget
+```
+
+What the model is and is not trusted for: it finds and filters candidates by reading content. It is never trusted for price,
+image or stock (read from the store's page) and anything it names that is not an approved store is dropped in code.
+
+Measured limits that shaped it: the domain filter returns only approved stores at ~30 domains, lets stray stores through at
+~61 and is ignored at 100, so searches are **chunked** (`SEARCH_CHUNK_DOMAINS`, default 35) and run in parallel; the list of
+allowed stores is also put in the prompt. A garment the shopper fixed is searched in every everyday group at once (`wide_groups`)
+so there is no waiting for a second search. Cost is about $0.008 per search (about $0.03-0.06 per turn); the cost is returned
+as `search_cost_usd`. Settings: `SEARCH_MODEL`, `SEARCH_ENGINE` (exa), `SEARCH_USES`, `SEARCH_RESULTS`, `SEARCH_TIMEOUT_S`; the tool
+server needs `OPENROUTER_API_KEY`. The agent's model calls use `LLM_REASONING_EFFORT=low`.
+
+## The earlier Tavily design (kept as `SEARCH_PROVIDER=tavily`)
 
 Replaces SerpAPI / Google Shopping (2026-10-05). Why: Google Shopping returns whatever merchants feed to Google and
 ranks it by popularity, which mostly means Myntra, Amazon and Flipkart. We want the niche brands in

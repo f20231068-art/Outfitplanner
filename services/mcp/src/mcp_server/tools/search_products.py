@@ -12,12 +12,19 @@ verifier does that. Here we only drop things that can never be useful.
 """
 
 import asyncio
+import html
 from collections.abc import Awaitable, Callable
 
 from mcp_server.cache import TTLCache
 from mcp_server.config import Settings
 from mcp_server.providers.page_facts import PageFacts
-from mcp_server.providers.tavily import Candidate, good_product_name, product_id_for, tidy_title
+from mcp_server.providers.tavily import (
+    Candidate,
+    SearchOutcome,
+    good_product_name,
+    product_id_for,
+    tidy_title,
+)
 from mcp_server.schemas import ProductResult, SearchProductsResult, ToolWarning
 from mcp_server.sellers import GROUPS, domains_for
 
@@ -32,6 +39,44 @@ def clean_keywords(raw: str | None) -> str:
     search query, so nothing else is let through."""
     kept = "".join(ch if (ch.isalnum() or ch in " -") else " " for ch in (raw or ""))
     return " ".join(kept.split())[:MAX_KEYWORDS_CHARS].strip()
+
+
+def search_chunks(groups: list[str], cfg: Settings) -> list[list[str]]:
+    """The store groups split into searches. The model search keeps to the stores only while the list is short, so groups are
+    packed, in order, into chunks of at most `search_chunk_domains` stores. Other providers search everything at once."""
+    if cfg.search_provider != "openrouter":
+        return [list(groups)]
+    chunks: list[list[str]] = []
+    size = 0
+    for g in groups:
+        n = len([d for d in domains_for([g]) if d in cfg.allowed_domains])
+        if chunks and size + n <= cfg.search_chunk_domains:
+            chunks[-1].append(g)
+            size += n
+        else:
+            chunks.append([g])
+            size = n
+    return chunks
+
+
+def merge_outcomes(outcomes: list[SearchOutcome]) -> SearchOutcome:
+    """The chunks' candidates as one list: taken in turn from each chunk (so reading the first pages covers every chunk), each
+    page once."""
+    seen: set[str] = set()
+    merged: list[Candidate] = []
+    longest = max((len(o.candidates) for o in outcomes), default=0)
+    for i in range(longest):
+        for o in outcomes:
+            if i < len(o.candidates):
+                c = o.candidates[i]
+                pid = product_id_for(c.url)
+                if pid not in seen:
+                    seen.add(pid)
+                    merged.append(c)
+    return SearchOutcome(
+        merged, sum(o.results_seen for o in outcomes), sum(o.skipped_not_product for o in outcomes),
+        sum(o.credits for o in outcomes), sum(o.cost_usd for o in outcomes),
+    )
 
 
 def build_query(
@@ -53,7 +98,7 @@ def product_from(candidate: Candidate, facts: PageFacts) -> ProductResult:
     attributes = {k: v for k, v in (("color", facts.color), ("fabric", facts.material)) if v}
     return ProductResult(
         product_id=product_id_for(candidate.url),
-        title=facts.name if good_product_name(facts.name) else tidy_title(candidate.title),
+        title=html.unescape(facts.name if good_product_name(facts.name) else tidy_title(candidate.title)),
         retailer=candidate.retailer,
         price_inr=facts.price_inr or 0,
         url=candidate.url,
@@ -102,6 +147,7 @@ async def run_search(
     fit: str | None = None,
     fabric: str | None = None,
     keywords: str | None = None,
+    style: str | None = None,
     store_groups: list[str] | None = None,
     limit: int = 20,
     page_reader: PageReader,
@@ -112,14 +158,28 @@ async def run_search(
     groups = [g for g in GROUPS if g in chosen]  # canonical order, so the cache key does not depend on input order
     domains = [d for d in domains_for(groups) if d in cfg.allowed_domains]
     query = build_query(item, color, fit, fabric, keywords)
+    context = " ".join((style or "").split())[:300] or None  # the look the shopper chose: the search model reads for it
 
-    key = f"{query}|{','.join(groups)}"
-    outcome = cache.get(key)
-    from_cache = outcome is not None
-    if outcome is None:
-        outcome = await provider.search(query, domains)  # the only line that spends a credit
-        if outcome.candidates:  # an empty answer is never remembered: it would turn one blank reply into hours of blank replies
-            cache.set(key, outcome)
+    # One search per CHUNK of stores (the model search keeps to the stores only while the list is short), all at once.
+    chunks = search_chunks(groups, cfg)
+
+    async def search_chunk(chunk_groups: list[str]) -> tuple[SearchOutcome, bool]:
+        chunk_domains = [d for g in chunk_groups for d in domains_for([g]) if d in cfg.allowed_domains]
+        key = f"{query}|{','.join(chunk_groups)}|{context or ''}"
+        cached = cache.get(key)
+        if cached is not None:
+            return cached, True
+        found = await provider.search(query, chunk_domains, context)  # the only line that spends a credit
+        if found.candidates:  # an empty answer is never remembered: it would turn one blank reply into hours of blank replies
+            cache.set(key, found)
+        return found, False
+
+    answers = await asyncio.gather(*[search_chunk(c) for c in chunks], return_exceptions=True)
+    done = [a for a in answers if not isinstance(a, BaseException)]
+    if not done:  # every chunk failed: report the first failure
+        raise next(a for a in answers if isinstance(a, BaseException))
+    outcome = merge_outcomes([o for o, _ in done])
+    from_cache = all(c for _, c in done)
 
     # Best candidates first (Tavily orders by relevance), a batch at a time, until there are enough usable products
     candidates = outcome.candidates[: cfg.page_reads_per_search]
@@ -157,6 +217,7 @@ async def run_search(
         stores_searched=len(domains),
         pages_read=pages_read,
         credits_spent=0 if from_cache else outcome.credits,
+        search_cost_usd=0.0 if from_cache else outcome.cost_usd,
         from_cache=from_cache,
         warnings=[ToolWarning(code=c, message=m, count=n) for c, m, n in skipped if n],
     )

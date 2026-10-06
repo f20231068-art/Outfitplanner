@@ -1,3 +1,8 @@
+import os
+
+# Most tests exercise the ranked-results (Tavily) search through a fake; the model search has its own tests.
+os.environ.setdefault("SEARCH_PROVIDER", "tavily")
+
 import json
 from pathlib import Path
 

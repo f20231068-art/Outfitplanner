@@ -18,6 +18,8 @@ For every candidate return its number, "fits" and a short "reason" (under 12 wor
 - "unsure": the text neither confirms nor contradicts it (for example the colour is not mentioned anywhere).
   Use "unsure" rather than guessing, and rather than "yes" when you cannot tell.
 A product that only mentions a colour in passing ("also available in white") is not that colour.
+When the title and the page's stated colour disagree (a title that says "Grey" with a stated colour of "Black"), answer "no":
+the shopper reads the title. A set or co-ord (a top and a bottom sold together) is not a single garment: answer "no".
 
 If fewer than "products_needed" candidates are "yes", you MUST give "retry_keywords": 2 to 6 plain words to ADD to the
 search that would likely find more fits (a synonym or a style word the stores use, e.g. "boxy drop shoulder" or "heavyweight

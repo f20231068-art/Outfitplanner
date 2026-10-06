@@ -55,7 +55,7 @@ class Shady:
     def __init__(self, url):
         self.url = url
 
-    async def search(self, query, domains):
+    async def search(self, query, domains, context=None):
         return SearchOutcome([Candidate(self.url, "Blue Polo", "", 0.9, "Shady", "shady.example.com")], 1, 0, 1)
 
 

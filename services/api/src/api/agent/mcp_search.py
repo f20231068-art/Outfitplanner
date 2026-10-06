@@ -71,6 +71,7 @@ class McpProductSearch:
             **({"fit": spec.fit} if spec.fit else {}),
             **({"fabric": spec.fabric} if spec.fabric else {}),
             **({"keywords": spec.keywords} if spec.keywords else {}),
+            **({"style": spec.style[:300]} if spec.style else {}),  # the look they chose: the search reads for pieces that suit it
         }
         for attempt in range(ATTEMPTS):
             try:

@@ -45,8 +45,8 @@ from api.agent.schemas import (
     TurnIntent,
 )
 from api.agent.state import StylistState
-from api.agent.stores import groups_for_item, resolve_groups
-from api.agent.verify import _GARMENT_NOUNS, _tokens
+from api.agent.stores import groups_for_item, resolve_groups, wide_groups
+from api.agent.verify import _COLOR_WORDS, _GARMENT_NOUNS, _tokens
 from api.config import settings
 
 REQUIRED_PREFS = ["budget_inr", "occasion"]  # menswear only: gender is never asked
@@ -230,6 +230,33 @@ def _planner_choices_only(item: ItemSpec) -> ItemSpec:
     )
 
 
+def _style_colour(item: ItemSpec, style_words: set[str]) -> ItemSpec:
+    """A colour the chosen style card itself names ("Olive polo & beige chinos") is a colour the shopper picked, not the
+    planner's guess: it is searched and verified. Checked here in code against the card's own words, never taken on trust
+    from the planner. 'dark olive' is reduced to the colour the card names ('olive'): the card said olive, not 'dark'."""
+    if item.color_source != "planner" or not item.color:
+        return item
+    tokens = _tokens(item.color)
+    core = [t for t in tokens if t in _COLOR_WORDS] or tokens
+    if core and all(t in style_words for t in core):
+        return item.model_copy(update={"color": " ".join(core), "color_source": "style"})
+    return item
+
+
+def apply_style_colours(specs: list[OutfitSpec], style_text: str) -> list[OutfitSpec]:
+    words = set(_tokens(style_text))
+    return [
+        s.model_copy(update={"top": _style_colour(s.top, words), "bottom": _style_colour(s.bottom, words)}) for s in specs
+    ]
+
+
+def with_style(spec: OutfitSpec, style_line: str) -> OutfitSpec:
+    return spec.model_copy(update={
+        "top": spec.top.model_copy(update={"style": style_line or None}),
+        "bottom": spec.bottom.model_copy(update={"style": style_line or None}),
+    })
+
+
 def _planner_colours_only(spec: OutfitSpec) -> OutfitSpec:
     """Whatever the model wrote, its own colours are a hidden hint: only the shopper's colours are verified."""
     return spec.model_copy(update={"top": _planner_choices_only(spec.top), "bottom": _planner_choices_only(spec.bottom)})
@@ -250,11 +277,17 @@ def widen_fixed_caps(spec: OutfitSpec, budget: int) -> OutfitSpec:
     return spec.model_copy(update={"top": top, "bottom": bottom})
 
 
+def _groups_for(item: ItemSpec, planned: list[str]) -> list[str]:
+    # a garment the shopper fixed is searched everywhere it can be sold; a piece the planner chose, in the planner's groups
+    return wide_groups(item.item, planned) if "item" in item.fixed else groups_for_item(item.item, planned)
+
+
 def assign_groups(spec: OutfitSpec, planned: list[str]) -> OutfitSpec:
-    """Tell the search which store groups to cover for each garment: the planned ones plus what the garment needs."""
+    """Tell the search which store groups to cover for each garment: the planned ones plus what the garment needs (and, for a
+    garment the shopper fixed, every group that sells it)."""
     return spec.model_copy(update={
-        "top": spec.top.model_copy(update={"store_groups": groups_for_item(spec.top.item, planned)}),
-        "bottom": spec.bottom.model_copy(update={"store_groups": groups_for_item(spec.bottom.item, planned)}),
+        "top": spec.top.model_copy(update={"store_groups": _groups_for(spec.top, planned)}),
+        "bottom": spec.bottom.model_copy(update={"store_groups": _groups_for(spec.bottom, planned)}),
     })
 
 
@@ -440,7 +473,7 @@ def build_graph(llm, search: ProductSearch, checkpointer=None, judge="auto"):
                 "anchor": anchor, "relation": edit.relation, "top": edit.top.model_dump() if edit.top else None,
                 "bottom": edit.bottom.model_dump() if edit.bottom else None, "note": edit.note, "budget_inr": budget,
             }
-        plan = structured(OutfitPlan, load_prompt("plan_outfits", 6), json.dumps(context))
+        plan = structured(OutfitPlan, load_prompt("plan_outfits", 7), json.dumps(context))
         top_wish, bottom_wish = wish_of(prefs, "top"), wish_of(prefs, "bottom")
         # different garments are the point; one polite re-ask if not. Only for pieces the shopper left open, and not when
         # their wording was a whole-outfit request ("suits") that fixes the garments in a way we could not read as a piece.
@@ -451,13 +484,17 @@ def build_graph(llm, search: ProductSearch, checkpointer=None, judge="auto"):
             if problems:
                 context["planner_notes"] += problems
                 plan = structured(OutfitPlan, load_prompt("plan_outfits", 6), json.dumps(context))
+        style = state["chosen_style"] or {}
         specs = apply_wishes([_planner_colours_only(s) for s in plan.outfits[:need]], prefs)
+        specs = apply_style_colours(specs, f"{style.get('name', '')} {style.get('description', '')}")
         if edit:
             anchor_spec = OutfitSpec.model_validate(anchor["spec"]) if anchor and anchor.get("spec") else None
             specs = apply_edit(specs, edit, anchor_spec)
-        style = state["chosen_style"] or {}
         groups = resolve_groups(plan.store_groups, f"{style.get('name', '')} {style.get('description', '')}", prefs.get("requests"))
-        specs = [clamp_to_budget(assign_groups(widen_fixed_caps(s, budget), groups), budget) for s in specs]
+        specs = [
+            with_style(clamp_to_budget(assign_groups(widen_fixed_caps(s, budget), groups), budget), _style_line(style))
+            for s in specs
+        ]
         return {"outfit_specs": [s.model_dump() for s in specs], "notes": [], "store_groups": groups}
 
     def find_products(state: StylistState):

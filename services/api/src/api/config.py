@@ -31,11 +31,14 @@ class Settings(BaseSettings):
     # One model call may not take longer than this; a stalled provider is cut off and retried once instead of hanging a turn.
     llm_timeout_s: float = 60.0
     llm_max_retries: int = 1
+    # "" = the model's own default. "low" (the default here) / "medium" / "high" asks a reasoning model to think less or more (OpenRouter's
+    # `reasoning.effort`): less is faster, and the agent's calls (read a message, plan outfits, judge products) are simple.
+    llm_reasoning_effort: str = "low"
     # AI-read search: a model reads the real candidate products and judges them against what the shopper asked for.
     # It can only keep or drop products that are already real and verified; it never supplies a fact.
     ai_judge: bool = True
-    judge_max_candidates: int = 8  # products shown to the judge per search
-    judge_search_retries: int = 2  # extra searches (with the judge's own keywords) when too few products fit
+    judge_max_candidates: int = 12  # products shown to the judge per search
+    judge_search_retries: int = 1  # extra searches (with the judge's own keywords) when too few products fit
     # (opencode only) override the endpoint style if the guess from the model name is wrong: chat | responses
     llm_api_mode: str = ""
 

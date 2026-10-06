@@ -87,7 +87,7 @@ def test_the_reader_drops_what_it_says_does_not_fit_and_prefers_what_it_says_fit
     top_a, top_b, top_c = tee(1, price=1900), tee(2, price=900), tee(3, price=1500)
     judge = verdicts({1: "no", 2: "yes", 3: "unsure"})  # numbering follows the order the candidates were shown in
     out = run(Search([top_a, top_b, top_c], [jeans(1)]), judge)
-    shown_order = judge.asked[0]["titles"]
+    shown_order = next(x for x in judge.asked if x["spec"].category == "top")["titles"]
     assert len(out.outfits) == 1
     chosen = out.outfits[0].top
     verdict_of = {t: v for t, v in zip(shown_order, ["no", "yes", "unsure"], strict=True)}
@@ -100,7 +100,7 @@ def test_the_reader_only_sees_products_that_already_passed_the_rule_based_check(
                      attributes={"gender": "women"}, in_stock=True)
     wrong_colour = tee(9, colour="Black")
     out = run(Search([tee(1), womens, wrong_colour], [jeans(1)]), judge := verdicts({1: "yes"}))
-    assert judge.asked[0]["titles"] == ["Oversized T-Shirt 1"]  # the women's item and the black tee never reach it
+    assert next(x for x in judge.asked if x["spec"].category == "top")["titles"] == ["Oversized T-Shirt 1"]  # the women's item and the black tee never reach it
     assert len(out.outfits) == 1
 
 
@@ -119,40 +119,47 @@ def test_the_reader_is_not_called_when_the_shopper_asked_for_nothing_specific():
 
 
 # ---- pieces that ask for the same thing share one search and one reading ---------------------------------------
-def test_four_outfits_with_the_same_fixed_pieces_cost_one_search_and_one_reading_each():
+def test_four_outfits_with_the_same_fixed_pieces_share_their_searches_and_one_reading_each():
     search = Search([tee(i, price=800 + i * 10) for i in range(1, 6)], [jeans(i, price=1200 + i) for i in range(1, 6)])
     all_yes = {i: "yes" for i in range(1, 6)}
-    judge = verdicts(all_yes, bottom=all_yes)
+    judge = verbose = verdicts(all_yes, bottom=all_yes)
     out = run(search, judge, specs=[fixed_spec(i) for i in range(4)])
-    assert len(search.calls) == 2 and len(judge.asked) == 2  # one for the tops, one for the bottoms (not 8)
+    # one set of searches for the four identical tops and one for the four identical bottoms (not eight of each), and a
+    # single reading for each
+    assert sum(c.category == "top" for c in search.calls) == 1 and sum(c.category == "bottom" for c in search.calls) == 1
+    assert len(judge.asked) == 2 and verbose is judge
     assert len(out.outfits) == 4
     assert len({o.top.url for o in out.outfits}) == 4 and len({o.bottom.url for o in out.outfits}) == 4  # each takes its own
 
 
 # ---- one extra search, with the reader's own words, when too few fit -----------------------------------------------
-def test_when_too_few_fit_the_search_is_repeated_once_with_the_readers_keywords():
+def test_when_too_few_fit_the_search_is_repeated_with_the_readers_keywords_over_every_store():
     search = Search([tee(1)], [jeans(1)], retry_tops=[tee(2)])
     judge = verdicts({1: "no", "retry": "boxy drop shoulder"}, {1: "yes"})
     out = run(search, judge)
-    assert [c.keywords for c in search.calls if c.category == "top"] == [None, "boxy drop shoulder"]
+    tops = [c for c in search.calls if c.category == "top"]
+    assert [c.keywords for c in tops] == [None, "boxy drop shoulder"]  # the search, then the retry
+    assert tops[-1].store_groups == []  # nowhere new to look, so the new words go over every store
     assert len(judge.asked) == 3  # tops, tops again, bottoms
     assert len(out.outfits) == 1
 
 
-def test_the_search_is_repeated_at_most_once_however_poorly_it_goes(monkeypatch):
+def test_the_search_is_repeated_at_most_the_allowed_number_of_times(monkeypatch):
     monkeypatch.setattr(settings, "judge_search_retries", 1)
     search = Search([tee(1)], [jeans(1)], retry_tops=[tee(2)])
     run(search, verdicts({1: "no", "retry": "more words"}))
-    assert sum(c.category == "top" for c in search.calls) == 2
+    assert sum(c.category == "top" for c in search.calls) == 1 + 1  # the search, and one retry
 
 
 def test_no_extra_search_when_the_reader_offers_no_keywords_or_retries_are_off(monkeypatch):
+    plain = ItemSpec(category="top", item="t-shirt", fit="oversized", max_price_inr=2000, fixed=["item", "fit"])  # no colour asked
+    spec = OutfitSpec(top=plain, bottom=fixed_spec().bottom, rationale="r")
     search = Search([tee(1)], [jeans(1)])
-    run(search, verdicts({1: "no"}))
-    assert sum(c.category == "top" for c in search.calls) == 1
+    run(search, verdicts({1: "no"}), specs=[spec])
+    assert sum(c.category == "top" for c in search.calls) == 1  # nothing new to look at
     monkeypatch.setattr(settings, "judge_search_retries", 0)
     search = Search([tee(1)], [jeans(1)])
-    run(search, verdicts({1: "no", "retry": "boxy"}))
+    run(search, verdicts({1: "no", "retry": "boxy"}), specs=[spec])
     assert sum(c.category == "top" for c in search.calls) == 1
 
 
@@ -207,29 +214,36 @@ def test_a_planners_colour_is_a_hint_the_reader_must_not_reject_for():
 
 
 # ---- a second search aims at the stores that specialise in the garment ----------------------------------------------------
-def test_the_second_search_for_jeans_covers_only_the_denim_stores():
-    wide = ItemSpec(category="bottom", item="jeans", fit="baggy", max_price_inr=2500, fixed=["item", "fit"], store_groups=["streetwear", "denim"])
-    spec = OutfitSpec(top=fixed_spec().top, bottom=wide, rationale="r")
+def test_a_garment_the_shopper_fixed_is_searched_once_and_carries_the_look():
+    spec = fixed_spec()
+    top = spec.top.model_copy(update={"style": "Olive polo and beige chinos"})
     search = Search([tee(1)], [jeans(1)])
-    run(search, verdicts({1: "yes"}, bottom={1: "no"}), specs=[spec])
-    seen = [c.store_groups for c in search.calls if c.category == "bottom"]
-    assert seen == [["streetwear", "denim"], ["denim"], ["smart_casual", "activewear"]]  # broad, the specialists, then the rest
+    run(search, verdicts({1: "yes"}, bottom={1: "yes"}), specs=[OutfitSpec(top=top, bottom=spec.bottom, rationale="r")])
+    assert sum(c.category == "top" for c in search.calls) == 1 and sum(c.category == "bottom" for c in search.calls) == 1
+    assert [c.style for c in search.calls if c.category == "top"] == ["Olive polo and beige chinos"]
 
 
-def test_after_the_specialists_the_everyday_clothing_stores_are_tried():
-    only_denim = ItemSpec(category="bottom", item="jeans", fit="baggy", max_price_inr=2500, fixed=["item", "fit"], store_groups=["denim"])
+def test_a_piece_the_planner_chose_is_searched_once_in_the_planners_groups():
+    spec = OutfitSpec(top=ItemSpec(category="top", item="polo", max_price_inr=2000, store_groups=["smart_casual"]),
+                      bottom=ItemSpec(category="bottom", item="chinos", max_price_inr=2500, store_groups=["smart_casual"]), rationale="r")
     search = Search([tee(1)], [jeans(1)])
-    run(search, verdicts({1: "yes"}, bottom={1: "no"}), specs=[OutfitSpec(top=fixed_spec().top, bottom=only_denim, rationale="r")])
-    seen = [c.store_groups for c in search.calls if c.category == "bottom"]
-    assert seen[:2] == [["denim"], ["streetwear", "smart_casual", "activewear"]]  # (a third try finds nothing new to look at)
-    assert len(seen) == 2
+    run(search, verdicts(), specs=[spec], words="")
+    assert [c.store_groups for c in search.calls] == [["smart_casual"], ["smart_casual"]]
 
 
-def test_a_second_search_for_a_top_covers_the_stores_the_first_did_not():
-    top = ItemSpec(category="top", item="t-shirt", fit="oversized", max_price_inr=2500, fixed=["item", "fit"], store_groups=["streetwear"])
+def test_when_the_reader_gives_no_words_another_name_for_the_colour_is_tried():
+    olive = ItemSpec(category="top", item="t-shirt", color="olive", color_source="user", max_price_inr=2000, fixed=["item", "color"])
+    spec = OutfitSpec(top=olive, bottom=fixed_spec().bottom, rationale="r")
     search = Search([tee(1)], [jeans(1)])
-    run(search, verdicts({1: "no"}), specs=[OutfitSpec(top=top, bottom=fixed_spec().bottom, rationale="r")])
-    assert [c.store_groups for c in search.calls if c.category == "top"] == [["streetwear"], ["smart_casual", "activewear"]]
+    run(search, verdicts({1: "no"}), specs=[spec])  # the reader says no and offers no words
+    assert [c.keywords for c in search.calls if c.category == "top"][-1] == "army green"
+
+
+def test_nothing_is_searched_twice_when_there_is_nothing_new_to_try():
+    search = Search([tee(1)], [jeans(1)])
+    plain = ItemSpec(category="top", item="t-shirt", max_price_inr=2000, fixed=["item"])
+    run(search, verdicts({1: "no"}), specs=[OutfitSpec(top=plain, bottom=fixed_spec().bottom, rationale="r")])
+    assert sum(c.category == "top" for c in search.calls) == 1
 
 
 def test_where_the_second_try_looks():

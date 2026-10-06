@@ -41,6 +41,7 @@ def get_llm(cfg: Settings = settings) -> ChatOpenAI:
             default_headers={"X-Title": "AI Stylist"},  # optional, shows the app on OpenRouter
             timeout=cfg.llm_timeout_s,
             max_retries=cfg.llm_max_retries,
+            **({"extra_body": {"reasoning": {"effort": cfg.llm_reasoning_effort}}} if cfg.llm_reasoning_effort else {}),
             **_http_clients(cfg),
         )
 

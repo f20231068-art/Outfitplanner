@@ -17,7 +17,23 @@ ENV_FILE = _find_env_file()
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 
-    # --- product search: Tavily Search (https://docs.tavily.com). One search = 1 credit (2 for "advanced").
+    # --- product search. "openrouter" (default): a model searches the web through OpenRouter's search tool, restricted to the
+    # approved stores, and reads what it finds. "tavily": ranked results from Tavily. Either way the price, image and stock
+    # of every product are read from the store's own page afterwards.
+    search_provider: str = "openrouter"
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    search_model: str = "openai/gpt-6-luna"
+    search_engine: str = "exa"  # OpenRouter search engine: exa | native | parallel ...
+    search_uses: int = 1  # web searches the model may run per call (each costs about $0.007 on top of the model)
+    search_results: int = 10  # products the model is asked to list
+    # The domain filter is honoured reliably only for a modest number of domains (measured: all-approved results at 30, stray
+    # stores at 61, ignored at 100). So a search over several store groups is split into chunks of at most this many
+    # domains, searched in parallel and merged; and nothing is ever sent beyond search_max_domains.
+    search_chunk_domains: int = 35
+    search_max_domains: int = 70
+    search_timeout_s: float = 60.0
+    # --- Tavily Search (https://docs.tavily.com). One search = 1 credit (2 for "advanced").
     tavily_api_key: str = ""
     tavily_base_url: str = "https://api.tavily.com/search"
     tavily_search_depth: str = "basic"  # basic | fast | ultra-fast = 1 credit; advanced = 2 credits
@@ -25,8 +41,8 @@ class Settings(BaseSettings):
     # Tavily only DISCOVERS pages; their price, image and stock are read from the store's own page (free):
     # Pages are read best-first in small batches until there are enough in-stock products, so a search whose top
     # candidates are sold out reads more, and one that finds good products at once reads few.
-    page_reads_per_search: int = 15  # never read more than this many candidate pages for one search
-    page_read_batch: int = 5  # read this many at a time (also the concurrency limit)
+    page_reads_per_search: int = 20  # never read more than this many candidate pages for one search
+    page_read_batch: int = 10  # read this many at a time (also the concurrency limit)
     enough_products: int = 8  # stop reading once this many usable products are in hand (the agent's reader then drops the ones that do not fit)
     tavily_country: str = ""  # e.g. "india" boosts Indian pages; empty = not sent
     # --- who may call this server: the API signs short-lived JWTs, we verify with its PUBLIC key.

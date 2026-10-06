@@ -24,7 +24,7 @@ from api.agent.schemas import (
     UnfilledSpec,
 )
 from api.agent.stores import second_try_groups
-from api.agent.verify import verify_product
+from api.agent.verify import colour_search_words, verify_product
 from api.config import settings
 
 log = logging.getLogger(__name__)
@@ -124,7 +124,7 @@ def _group_key(spec: ItemSpec) -> tuple:
 def _wants_reader(spec: ItemSpec, inp: FindProductsInput) -> bool:
     """The reader is worth a model call when the shopper asked for something specific; for a purely planner-chosen piece
     the rule-based check is enough."""
-    return bool(inp.shopper_words or spec.fixed or spec.avoid_colors or spec.color_source == "user")
+    return bool(inp.shopper_words or spec.fixed or spec.avoid_colors or spec.color_source in ("user", "style"))
 
 
 def find_products_for_specs(inp: FindProductsInput, search: ProductSearch, judge: Judge | None = None) -> FindProductsOutput:
@@ -145,12 +145,13 @@ def find_products_for_specs(inp: FindProductsInput, search: ProductSearch, judge
     def work(group: list[ItemSpec]) -> tuple[list[Product], Verdicts]:
         """One search for a group of identical pieces, then (if worthwhile) the reader, then at most one more search."""
         lead = group[0].model_copy(update={"max_price_inr": max(s.max_price_inr for s in group)})
-        hits = safe_search(lead)
         verdicts: Verdicts = {}
+        hits = safe_search(lead)
         if judge is None or not _wants_reader(lead, inp):
             return hits, verdicts
-        needed = len(group)  # how many different products the outfits need from this search
         tried = [list(lead.store_groups)]  # the group lists searched so far (a retry never repeats one)
+        needed = len(group)  # how many different products the outfits need from this search
+        words_tried: set[str] = set()
         for attempt in range(1 + max(0, settings.judge_search_retries)):
             fresh = [h for h in hits if h.url not in verdicts and usable(h, lead)]
             fresh = [h.model_copy(update={"verification": verify_product(h, lead)}) for h in fresh]
@@ -172,10 +173,16 @@ def find_products_for_specs(inp: FindProductsInput, search: ProductSearch, judge
             # A second search, aimed better: the reader's own words, and other stores (the specialists in the garment, or the
             # everyday-clothing stores the first search did not cover). One search gives each store only a thin share of its
             # 20 results, so a different set of stores finds different products.
+            if not keywords and lead.color_source in ("user", "style"):
+                keywords = colour_search_words(lead.color)  # no words from the reader: another way stores name the colour
+            if keywords in words_tried:
+                keywords = None
             if not keywords and not elsewhere:
                 break
-            tried.append(elsewhere or list(lead.store_groups))
-            more = safe_search(lead.model_copy(update={"keywords": keywords, "store_groups": elsewhere or lead.store_groups}))
+            words_tried.add(keywords or "")
+            retry_groups = elsewhere or []  # nowhere new to look: the same words over every store
+            tried.append(retry_groups)
+            more = safe_search(lead.model_copy(update={"keywords": keywords, "store_groups": retry_groups}))
             seen = {h.url for h in hits}
             hits += [h for h in more if h.url not in seen]
         return hits, verdicts

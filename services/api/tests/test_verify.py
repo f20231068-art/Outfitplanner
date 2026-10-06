@@ -91,8 +91,17 @@ def test_outfit_with_an_assumed_colour_is_marked_low_confidence():
 
 
 def test_wrong_item_is_rejected():
-    report = verify_product(_product(title="Peach Skinny Jeans", attributes={"color": "peach"}), _spec())
+    report = verify_product(_product(title="Peach Skinny Shorts", attributes={"color": "peach"}), _spec())
     assert "item" in report.blocking
+
+
+def test_pants_asked_for_are_met_by_jeans_chinos_joggers_cargos_and_track_pants_but_not_shorts():
+    spec = _spec(item="pants", color="black")
+    for title in ("Black Baggy Fit Jeans", "Black Chinos", "Black Joggers", "Black Cargos", "Black Baggy Trackpant", "Black Parachute Pants"):
+        report = verify_product(_product(title=title, attributes={"color": "black", "gender": "men"}), spec)
+        assert report.is_match and next(c for c in report.checks if c.attribute == "item").status == "match", title
+    shorts = verify_product(_product(title="Black Baggy Shorts", attributes={"color": "black", "gender": "men"}), spec)
+    assert "item" in shorts.blocking
 
 
 def test_price_over_cap_is_rejected():
@@ -295,3 +304,23 @@ def test_the_mock_search_decoy_is_a_womens_item_when_no_colour_was_asked_for():
     )
     assert len(out.outfits) == 1 and {r.retailer for r in out.rejected} == {"Bewakoof"}
     assert any("gender" in reason for r in out.rejected for reason in r.reasons)
+
+
+def test_a_title_that_names_only_another_colour_beats_a_page_field_that_agrees():
+    spec = _spec(category="bottom", item="pants", color="black")
+    grey = _product(title="Grey Baggy Parachute Pants", attributes={"color": "Black", "gender": "men"})
+    report = verify_product(grey, spec)
+    assert not report.is_match and "color" in report.blocking
+    ok = _product(title="Black Baggy Parachute Pants", attributes={"color": "Black", "gender": "men"})
+    assert verify_product(ok, spec).is_match
+    both = _product(title="Black Pants with Grey Stripes", attributes={"color": "Black", "gender": "men"})  # names the wanted one
+    assert verify_product(both, spec).is_match
+
+
+def test_a_co_ord_set_is_not_a_single_top_or_bottom():
+    spec = _spec(category="top", item="t-shirt", color="olive")
+    coord = _product(title="Men Oversized T-Shirt and Shorts Co-Ord Set", attributes={"color": "Olive", "gender": "men"})
+    report = verify_product(coord, spec)
+    assert not report.is_match and "category" in report.blocking
+    plain = _product(title="Men Oversized T-Shirt", attributes={"color": "Olive", "gender": "men"})
+    assert verify_product(plain, spec).is_match

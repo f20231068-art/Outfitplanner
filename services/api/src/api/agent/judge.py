@@ -36,7 +36,7 @@ def wanted_by_shopper(spec: ItemSpec) -> dict:
     required = {"item": spec.item}
     for attr in ("color", "fit", "fabric"):
         value = getattr(spec, attr)
-        if value and (attr in spec.fixed or (attr == "color" and spec.color_source == "user")):
+        if value and (attr in spec.fixed or (attr == "color" and spec.color_source in ("user", "style"))):
             required[attr] = value
     return required
 
