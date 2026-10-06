@@ -1,3 +1,4 @@
+# Rebuild trigger: model web search release
 # The API (FastAPI + the LangGraph agent). Build context is the REPO ROOT, because the agent's
 # prompts live in /prompts:
 #   docker build -f services/api/Dockerfile -t stylist-api .

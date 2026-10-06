@@ -1,3 +1,4 @@
+# Rebuild trigger: model web search release
 # Outfitmaxxing UI build (redeploy trigger for Railway)
 # The web app AND the public door in one container, for hosts that limit how many services a project may have
 # (Railway's small plans). Caddy listens on the public port and sends API paths to the API's private address and

@@ -1,3 +1,4 @@
+# Rebuild trigger: model web search release (needs OPENROUTER_API_KEY)
 # MCP tool server. Build context: services/mcp
 #   docker build -t stylist-mcp services/mcp
 #
